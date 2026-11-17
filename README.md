@@ -66,4 +66,4 @@ Agent 的硬性操作规则见 [AGENTS.md](AGENTS.md)，架构与可信度边界
 - `musicdl` 使用 PolyForm Noncommercial 许可证；若此项目用于商业活动，部署前必须单独确认授权或替换该后端。
 - 当前机器已安装 FFmpeg 9.0.1，文件级验真已启用。
 - Gandalf 不进入常规真值链；即使以后接入，也只在候选不确定时按需锚定。
-- 非汽水平台音频暂不自动经过旧版 `go-music-dl` Web 后端；在无界面下载后端完成前会明确记录 `HEADLESS_BACKEND_REQUIRED`，不会偷偷启动 UI。
+- 五平台音频均走无界面链路：汽水使用客户端 helper，其余平台由 `musicdl` 在同一进程内解析短期地址并直接下载；短期地址不写入数据库、日志或下载清单，也不会启动旧 Web/UI 服务。

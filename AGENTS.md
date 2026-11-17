@@ -30,3 +30,4 @@
 - 可重建的网页、搜索、日志和中间下载只写入 `D:\三喜\临时文件` 下的任务独立目录。
 - 不把密码、Cookie、Authorization、签名参数或短期音频 URL 写入数据库、日志、MCP 参数或交付表格。
 - 下载完成后必须用文件签名、大小及 ffprobe 验证；HTML 错误页不能算音频成功。
+- 音频下载统一调用 `collect_materials_batch(include_audio=true)` 或 `download_verified_candidate`；不得手工记录短期 URL，也不得启动旧 `go-music-dl web`。汽水走 helper，其余平台走进程内 `musicdl` headless 下载器。

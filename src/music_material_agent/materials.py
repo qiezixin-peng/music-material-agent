@@ -55,12 +55,7 @@ def run_material_batch(
                             job_id, row["row_id"], platform, kind, url
                         )
                 elif kind == "audio":
-                    if platform != "soda":
-                        result = {
-                            "status": "HEADLESS_BACKEND_REQUIRED",
-                            "error": "Non-Soda audio is not run through the legacy Web/UI backend",
-                        }
-                    elif not data.get("platform_id"):
+                    if not data.get("platform_id"):
                         result = {"status": "NOT_AVAILABLE", "error": "Candidate has no platform ID"}
                     else:
                         result = service.download_candidate(job_id, data)

@@ -70,7 +70,11 @@ def _safe_http_url(value: Any) -> str | None:
 
 RELEASE_PATHS: dict[str, tuple[tuple[str | int, ...], ...]] = {
     "netease": (("search", "publishTime"),),
-    "kugou": (("search", "PublishDate"), ("search", "PublishTime")),
+    "kugou": (
+        ("search", "PublishDate"),
+        ("search", "PublishTime"),
+        ("search", "album_info", "publishtime"),
+    ),
     # These QQ paths are deliberately allowlisted but only emitted when a real response
     # supplies a complete date. No date is inferred from an ID or album name.
     "qq": (
@@ -102,6 +106,7 @@ def extract_musicdl_enrichment(raw_data: Any, platform: str) -> dict[str, Any]:
             (
                 ("lyric", "artists", 0, "base", "avatar"),
                 ("search", "SingerPic"),
+                ("search", "song_detail", "authors", 0, "avatar"),
             ),
         )
         if isinstance(value, str):

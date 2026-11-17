@@ -132,6 +132,77 @@ def _qq_metadata_candidate(item: dict[str, Any]) -> dict[str, Any]:
     return candidate
 
 
+def _detail_metadata_candidate(
+    item: dict[str, Any], platform: str, identifier: str
+) -> dict[str, Any]:
+    """Convert musicdl's official song-detail payloads without invoking audio parsers."""
+    title: Any = None
+    artists_raw: Any = None
+    album_raw: Any = None
+    duration_s: Any = None
+    cover_url: Any = None
+    resolved_id = ""
+    if platform == "netease":
+        resolved_id = str(item.get("id") or "")
+        title = item.get("name")
+        artists = item.get("ar") if isinstance(item.get("ar"), list) else []
+        artist_names = [
+            str(artist.get("name"))
+            for artist in artists
+            if isinstance(artist, dict) and artist.get("name")
+        ]
+        artists_raw = ", ".join(artist_names)
+        album = item.get("al") if isinstance(item.get("al"), dict) else {}
+        album_raw = album.get("name")
+        duration_s = float(item.get("dt") or 0) / 1000 or None
+        cover_url = album.get("picUrl")
+    elif platform == "kugou":
+        detail = item.get("song_detail") if isinstance(item.get("song_detail"), dict) else {}
+        resolved_id = str(detail.get("hash") or detail.get("req_hash") or "").upper()
+        title = item.get("songname") or detail.get("songName")
+        artists_raw = item.get("singername") or detail.get("author_name")
+        album_raw = item.get("album_name")
+        duration_s = item.get("duration")
+        cover_url = item.get("cover_url") or detail.get("album_img")
+        if isinstance(cover_url, str):
+            cover_url = cover_url.replace("{size}", "400")
+    elif platform == "kuwo":
+        resolved_id = str(item.get("id") or item.get("musicId") or identifier)
+        title = item.get("songName") or item.get("name")
+        artists_raw = item.get("artist") or item.get("artistName")
+        album_raw = item.get("album") or item.get("albumName")
+        duration_s = item.get("duration")
+        cover_url = item.get("pic") or item.get("pic120")
+    else:
+        raise ValueError(f"Unsupported detail platform: {platform}")
+    candidate: dict[str, Any] = {
+        "platform": platform,
+        "backend": "musicdl",
+        "platform_id": resolved_id or identifier,
+        "title_raw": title,
+        "artists_raw": artists_raw,
+        "artists": split_artists(artists_raw),
+        "album_raw": album_raw,
+        "duration_s": duration_s,
+        "duration": None,
+        "cover_url": cover_url,
+        "lyric": None,
+        "audio": {
+            "available": False,
+            "ext": None,
+            "file_size_bytes": None,
+            "bitrate": None,
+            "codec": None,
+            "samplerate": None,
+            "channels": None,
+        },
+        "root_source": "official_song_detail",
+        "metadata_only": True,
+    }
+    candidate.update(extract_musicdl_enrichment({"search": item}, platform))
+    return candidate
+
+
 class MusicDlAdapter:
     name = "musicdl"
 
@@ -203,7 +274,7 @@ class MusicDlAdapter:
 
     def resolve_platform_id(self, platform_id: str) -> SearchResponse:
         identifier = str(platform_id).strip()
-        if self.platform != "qq":
+        if self.platform not in {"qq", "netease", "kugou", "kuwo"}:
             return SearchResponse(
                 backend=self.name,
                 platform=self.platform,
@@ -222,20 +293,28 @@ class MusicDlAdapter:
             if not isinstance(item, dict) or not item:
                 return SearchResponse(
                     backend=self.name,
-                    platform="qq",
+                    platform=self.platform,
                     query=f"id:{identifier}",
                     status="RESOLVE_UNAVAILABLE",
                     candidates=[],
                     pages_scanned=0,
                     exhaustive=False,
-                    error="QQ official song detail returned no metadata",
+                    error=f"{self.platform} official song detail returned no metadata",
                 )
-            candidate = _qq_metadata_candidate(item)
-            if candidate.get("platform_id") != identifier:
-                raise RuntimeError("QQ official song detail returned a different platform ID")
+            candidate = (
+                _qq_metadata_candidate(item)
+                if self.platform == "qq"
+                else _detail_metadata_candidate(item, self.platform, identifier)
+            )
+            returned_id = str(candidate.get("platform_id") or "")
+            expected_id = identifier.upper() if self.platform == "kugou" else identifier
+            if returned_id != expected_id:
+                raise RuntimeError(
+                    f"{self.platform} official song detail returned a different platform ID"
+                )
             return SearchResponse(
                 backend=self.name,
-                platform="qq",
+                platform=self.platform,
                 query=f"id:{identifier}",
                 status="OK",
                 candidates=[candidate],
@@ -246,7 +325,7 @@ class MusicDlAdapter:
             sanitized = _sanitize_backend_error(f"{type(error).__name__}: {error}")
             return SearchResponse(
                 backend=self.name,
-                platform="qq",
+                platform=self.platform,
                 query=f"id:{identifier}",
                 status="RESOLVE_UNAVAILABLE",
                 candidates=[],

@@ -20,7 +20,7 @@ SQLite 使用 WAL 模式，保存任务状态、租约、观测、不可变快�
 
 可信度按来源分层：平台原生响应/页面是事实来源；`musicdl 2.14.2` 是五平台主干候选与下载后端；`soda-agent-helper` 是汽水的无界面签名搜索和下载补强，不提供 Web UI 或监听端口；Scrapling 是页面结构变化时的自适应证据层；Gandalf 只提供候选关系。跨平台匹配由标题、艺人、专辑、时长和版本词共同评分，不能仅靠名称相等。
 
-当输入含平台 ID 时，协调器跳过模糊关键词并优先执行平台官方精确回查；汽水 SID 和 QQ MID 已有真实官方回查链路。Gandalf 只在原生候选低于置信度门槛时产生待验证 ID；这些 ID 必须经官方回查后才能进入候选，Gandalf 名称仅作为 `anchor_evidence` 留痕。汽水关键词接口当前每个查询变体只扫描第一页，因此始终保持 `exhaustive=false` 并写入分页限制警告。
+当输入含平台 ID 时，协调器跳过模糊关键词并优先执行平台官方精确回查；汽水 SID、网易云歌曲 ID、QQ MID、酷狗 Hash 和酷我歌曲 ID 均已有真实官方回查链路。Gandalf 只在原生候选低于置信度门槛时产生待验证 ID；这些 ID 必须经官方回查后才能进入候选，Gandalf 名称仅作为 `anchor_evidence` 留痕。汽水关键词接口当前每个查询变体只扫描第一页，因此始终保持 `exhaustive=false` 并写入分页限制警告。
 
 下载采用两阶段提交：后端引用解析出的短期地址不进入任务日志，内容先写临时 staging；文件签名、SHA-256、FFprobe 音频流和时长通过后才原子移动到正式输出。封面、头像和歌词使用独立的类型与大小验证。
 
@@ -28,4 +28,4 @@ SQLite 使用 WAL 模式，保存任务状态、租约、观测、不可变快�
 
 状态机把“事实不存在”和“技术上没拿到”分开。`AUTH_REQUIRED`、`RATE_LIMITED`、`SEARCH_UNAVAILABLE`、`SEARCH_PARTIAL`、`FOUND_CANDIDATES` 均不能降级为 `NOT_FOUND_EXHAUSTIVE`。
 
-音频自动化遵守无 UI 约束：汽水通过 headless helper 下载；其他平台在专用无界面下载链完成前不会回退启动旧 Web 服务，而是写入 `HEADLESS_BACKEND_REQUIRED`。这不会影响搜索元数据、封面、头像和歌词的采集与审计。
+音频自动化遵守无 UI 约束：汽水通过 headless helper 下载；网易云、QQ、酷狗、酷我通过 `musicdl` 的 Python 后端在单一进程内重新取得精确 ID 的短期音频引用，直接写入 staging。项目不调用 `musicdl` 旧 Web 服务，也不保存其包含短期 URL 的下载结果 pickle；文件必须通过签名、FFprobe、时长和 SHA-256 验证后才进入正式目录。

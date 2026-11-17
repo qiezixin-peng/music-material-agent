@@ -169,18 +169,29 @@ class MusicMaterialService:
             job = connection.execute("SELECT trace_dir,output_dir FROM jobs WHERE id=?", (job_id,)).fetchone()
         if not job:
             raise KeyError(job_id)
-        from .adapters.go_music_dl_adapter import GoMusicDlAdapter
+        platform = str(candidate.get("platform") or "")
+        if platform == "soda":
+            from .adapters.go_music_dl_adapter import GoMusicDlAdapter
 
-        adapter = GoMusicDlAdapter(Path(job["trace_dir"]) / "runtime" / "go-music-dl")
-        try:
-            result = adapter.download(
+            adapter = GoMusicDlAdapter(Path(job["trace_dir"]) / "runtime" / "soda-helper")
+            try:
+                result = adapter.download(
+                    candidate,
+                    Path(job["trace_dir"]) / "downloads" / "staging",
+                    Path(job["output_dir"]) / "audio" / platform,
+                )
+            finally:
+                if adapter._service:
+                    adapter._service.close()
+        else:
+            from .musicdl_download import download_musicdl_candidate
+
+            result = download_musicdl_candidate(
                 candidate,
                 Path(job["trace_dir"]) / "downloads" / "staging",
-                Path(job["output_dir"]) / "audio" / str(candidate.get("platform") or "unknown"),
+                Path(job["output_dir"]) / "audio" / (platform or "unknown"),
+                Path(job["trace_dir"]) / "runtime" / "musicdl-download" / platform,
             )
-        finally:
-            if adapter._service:
-                adapter._service.close()
         with self.database.transaction(immediate=True) as connection:
             self._event(connection, job_id, "CANDIDATE_DOWNLOAD", {"platform": candidate.get("platform"), "platform_id": candidate.get("platform_id"), "result": result}, actor="agent")
         return result

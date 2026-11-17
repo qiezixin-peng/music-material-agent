@@ -6,6 +6,7 @@ from pathlib import Path
 from music_material_agent.adapters.base import SearchRequest
 from music_material_agent.adapters.musicdl_adapter import (
     MusicDlAdapter,
+    _detail_metadata_candidate,
     _qq_metadata_candidate,
     song_info_to_candidate,
 )
@@ -193,6 +194,50 @@ def test_qq_adapter_resolves_exact_id_without_keyword_or_audio(tmp_path: Path) -
     assert response.status == "OK"
     assert response.candidates[0]["title_raw"] == "平台官方名称"
     assert response.candidates[0]["release_date"] == "2022-03-04"
+
+
+def test_detail_candidate_converts_three_native_platform_shapes() -> None:
+    netease = _detail_metadata_candidate(
+        {
+            "id": 347230,
+            "name": "海阔天空",
+            "ar": [{"name": "Beyond"}],
+            "al": {"name": "海阔天空"},
+            "dt": 326000,
+            "publishTime": 747504000000,
+        },
+        "netease",
+        "347230",
+    )
+    assert netease["platform_id"] == "347230"
+    assert netease["release_date"] == "1993-09-09"
+    assert netease["duration_s"] == 326
+
+    kugou = _detail_metadata_candidate(
+        {
+            "songname": "海阔天空",
+            "singername": "BEYOND",
+            "album_name": "乐与怒",
+            "duration": 324.8,
+            "song_detail": {
+                "hash": "ABC123",
+                "authors": [{"avatar": "http://img.test/{size}/artist.jpg"}],
+            },
+            "album_info": {"publishtime": "1993-05-14 00:00:00"},
+        },
+        "kugou",
+        "ABC123",
+    )
+    assert kugou["release_date"] == "1993-05-14"
+    assert kugou["artist_avatar_url"] == "http://img.test/400/artist.jpg"
+
+    kuwo = _detail_metadata_candidate(
+        {"id": "228908", "songName": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269},
+        "kuwo",
+        "228908",
+    )
+    assert kuwo["artists"] == ["周杰伦"]
+    assert kuwo["metadata_only"] is True
 
 
 def test_musicdl_empty_result_is_not_exhaustive(tmp_path: Path) -> None:
