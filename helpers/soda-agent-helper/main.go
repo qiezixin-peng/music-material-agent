@@ -58,6 +58,7 @@ type response struct {
 var (
 	credentialPattern = regexp.MustCompile(`(?i)(cookie|token|authorization|password)(\s*[=:]\s*)[^\s,;]+`)
 	urlQueryPattern   = regexp.MustCompile(`(https?://[^?\s]+)\?[^\s]+`)
+	numericIDPattern  = regexp.MustCompile(`^[0-9]+$`)
 )
 
 func main() {
@@ -71,6 +72,8 @@ func main() {
 	switch strings.ToLower(strings.TrimSpace(req.Operation)) {
 	case "search":
 		write(search(client, strings.TrimSpace(req.Query)))
+	case "resolve":
+		write(resolve(client, req.Song))
 	case "download":
 		write(download(client, req.Song, strings.TrimSpace(req.OutputPath)))
 	default:
@@ -88,14 +91,32 @@ func search(client *soda.Soda, query string) response {
 	}
 	items := make([]candidate, 0, len(songs))
 	for _, song := range songs {
-		items = append(items, candidate{
-			ID: song.ID, Name: song.Name, Artist: song.Artist, Album: song.Album,
-			AlbumID: song.AlbumID, Duration: song.Duration, Size: song.Size,
-			Bitrate: song.Bitrate, Cover: song.Cover, Link: song.Link,
-			Extra: song.Extra, IsVIP: song.IsVIP,
-		})
+		items = append(items, candidateFromSong(song))
 	}
 	return response{Status: "OK", Candidates: items}
+}
+
+func resolve(client *soda.Soda, input *songInput) response {
+	if input == nil || !numericIDPattern.MatchString(strings.TrimSpace(input.ID)) {
+		return response{Status: "INVALID_REQUEST", Error: "numeric soda song id is required"}
+	}
+	song, err := client.Parse("https://www.qishui.com/track/" + strings.TrimSpace(input.ID))
+	if err != nil {
+		return response{Status: "RESOLVE_UNAVAILABLE", Error: safeError(err)}
+	}
+	if song == nil || strings.TrimSpace(song.ID) == "" {
+		return response{Status: "RESOLVE_UNAVAILABLE", Error: "Soda returned no track metadata"}
+	}
+	return response{Status: "OK", Candidates: []candidate{candidateFromSong(*song)}}
+}
+
+func candidateFromSong(song model.Song) candidate {
+	return candidate{
+		ID: song.ID, Name: song.Name, Artist: song.Artist, Album: song.Album,
+		AlbumID: song.AlbumID, Duration: song.Duration, Size: song.Size,
+		Bitrate: song.Bitrate, Cover: song.Cover, Link: song.Link,
+		Extra: song.Extra, IsVIP: song.IsVIP,
+	}
 }
 
 func download(client *soda.Soda, input *songInput, outputPath string) response {

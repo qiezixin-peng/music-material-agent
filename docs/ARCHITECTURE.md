@@ -18,6 +18,8 @@ SQLite 使用 WAL 模式，保存任务状态、租约、观测、不可变快�
 
 可信度按来源分层：平台原生响应/页面是事实来源；`musicdl 2.14.2` 是五平台主干候选与下载后端；`soda-agent-helper` 是汽水的无界面签名搜索和下载补强，不提供 Web UI 或监听端口；Scrapling 是页面结构变化时的自适应证据层；Gandalf 只提供候选关系。跨平台匹配由标题、艺人、专辑、时长和版本词共同评分，不能仅靠名称相等。
 
+当输入含平台 ID 时，协调器跳过模糊关键词并优先执行平台官方精确回查。Gandalf 只在原生候选低于置信度门槛时产生待验证 ID；这些 ID 必须经官方回查后才能进入候选，Gandalf 名称仅作为 `anchor_evidence` 留痕。汽水关键词接口当前每个查询变体只扫描第一页，因此始终保持 `exhaustive=false` 并写入分页限制警告。
+
 下载采用两阶段提交：后端引用解析出的短期地址不进入任务日志，内容先写临时 staging；文件签名、SHA-256、FFprobe 音频流和时长通过后才原子移动到正式输出。封面、头像和歌词使用独立的类型与大小验证。
 
 状态机把“事实不存在”和“技术上没拿到”分开。`AUTH_REQUIRED`、`RATE_LIMITED`、`SEARCH_UNAVAILABLE`、`SEARCH_PARTIAL`、`FOUND_CANDIDATES` 均不能降级为 `NOT_FOUND_EXHAUSTIVE`。

@@ -8,15 +8,23 @@ from typing import Any, Iterable
 
 from ..adapters.base import PlatformAdapter, SearchRequest
 from ..constants import PLATFORMS
-from .planner import expand_queries, normalize_text
+from .planner import expand_queries, normalize_text, split_artists
 from .ranking import rank_candidates
 from .status import determine_search_status
 
 
 class SearchCoordinator:
-    def __init__(self, trace_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        trace_dir: str | Path | None = None,
+        *,
+        anchor_client: Any | None = None,
+        anchor_trigger_score: float = 0.65,
+    ) -> None:
         self._adapters: dict[str, list[PlatformAdapter]] = defaultdict(list)
         self.trace_dir = Path(trace_dir).resolve() if trace_dir else None
+        self.anchor_client = anchor_client
+        self.anchor_trigger_score = anchor_trigger_score
         if self.trace_dir:
             self.trace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -53,6 +61,116 @@ class SearchCoordinator:
         duration = candidate.get("duration_s") or ""
         return f"fields:{title}:{artists}:{duration}"
 
+    @staticmethod
+    def _target_platform_id(platform: str, target: dict[str, Any]) -> str:
+        mapping = target.get("platform_ids")
+        if isinstance(mapping, dict) and mapping.get(platform):
+            return str(mapping[platform]).strip()
+        keys = [f"{platform}_id", f"{platform}_sid"]
+        if platform == "soda":
+            keys.extend(("汽水SID", "汽水sid", "汽水ID", "汽水id"))
+        for key in keys:
+            if target.get(key):
+                return str(target[key]).strip()
+        if target.get("platform") == platform and target.get("platform_id"):
+            return str(target["platform_id"]).strip()
+        return ""
+
+    def _resolve_uncertain_anchors(
+        self,
+        platform: str,
+        target: dict[str, Any],
+        adapters: list[PlatformAdapter],
+        ranked: list[dict[str, Any]],
+        unique_candidates: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if self.anchor_client is None:
+            return None
+        if ranked and float(ranked[0].get("match_score") or 0) >= self.anchor_trigger_score:
+            return None
+        resolvers = [
+            (adapter, getattr(adapter, "resolve_platform_id", None))
+            for adapter in adapters
+            if callable(getattr(adapter, "resolve_platform_id", None))
+        ]
+        if not resolvers:
+            return None
+        title = str(target.get("title") or target.get("title_raw") or "").strip()
+        if not title:
+            return None
+        anchor_result = self.anchor_client.search(title, platform=platform, limit=100)
+        anchor_items = anchor_result.get("candidates") or []
+        proxies = []
+        by_platform_id: dict[str, dict[str, Any]] = {}
+        for item in anchor_items:
+            identifier = str(item.get("platform_id") or "").strip()
+            if not identifier or identifier in by_platform_id:
+                continue
+            proxy = {
+                "platform_id": identifier,
+                "title_raw": item.get("recorded_title"),
+                "artists_raw": item.get("recorded_artist"),
+                "artists": split_artists(item.get("recorded_artist")),
+            }
+            proxies.append(proxy)
+            by_platform_id[identifier] = item
+        ranked_anchors = rank_candidates(target, proxies)
+        selected = [
+            item for item in ranked_anchors if float(item.get("match_score") or 0) >= 0.45
+        ][:10]
+        summary: dict[str, Any] = {
+            "policy": "uncertain_only_official_recheck",
+            "status": anchor_result.get("status"),
+            "authoritative": False,
+            "returned_count": len(anchor_items),
+            "selected_for_recheck": len(selected),
+            "officially_verified": 0,
+            "resolutions": [],
+        }
+        for proxy in selected:
+            identifier = str(proxy["platform_id"])
+            anchor = by_platform_id[identifier]
+            for adapter, resolver in resolvers:
+                response = resolver(identifier)
+                summary["resolutions"].append(
+                    {
+                        "platform_id": identifier,
+                        "backend": response.backend,
+                        "status": response.status,
+                        "candidate_count": len(response.candidates),
+                        "raw_trace_path": response.raw_trace_path,
+                    }
+                )
+                if not response.candidates:
+                    continue
+                for candidate in response.candidates:
+                    verified = {
+                        **candidate,
+                        "anchor_evidence": {
+                            "role": "anchor_only",
+                            "authoritative": False,
+                            "anchor_id": anchor.get("anchor_id"),
+                            "recorded_title": anchor.get("recorded_title"),
+                            "recorded_artist": anchor.get("recorded_artist"),
+                        },
+                    }
+                    key = self._candidate_key(verified)
+                    if key in unique_candidates:
+                        unique_candidates[key]["anchor_evidence"] = verified["anchor_evidence"]
+                    else:
+                        unique_candidates[key] = verified
+                    summary["officially_verified"] += 1
+                break
+        self._append_trace(
+            {
+                "event": "optional_anchor_recheck",
+                "platform": platform,
+                "target": target,
+                "summary": summary,
+            }
+        )
+        return summary
+
     def search_platform(
         self,
         platform: str,
@@ -83,6 +201,52 @@ class SearchCoordinator:
                     "error": "No adapter is installed for this platform",
                 }
             )
+        exact_platform_id = self._target_platform_id(platform, target)
+        if exact_platform_id:
+            for adapter in adapters:
+                resolver = getattr(adapter, "resolve_platform_id", None)
+                if not callable(resolver):
+                    continue
+                response = resolver(exact_platform_id)
+                attempt = {
+                    "backend": response.backend,
+                    "query": response.query,
+                    "query_reason": "exact_platform_id",
+                    "status": response.status,
+                    "pages_scanned": response.pages_scanned,
+                    "exhaustive": response.exhaustive,
+                    "candidate_count": len(response.candidates),
+                    "error": response.error,
+                    "warnings": response.warnings,
+                    "raw_trace_path": response.raw_trace_path,
+                }
+                attempts.append(attempt)
+                self._append_trace(
+                    {
+                        "event": "platform_id_resolve_attempt",
+                        "platform": platform,
+                        "target": target,
+                        "attempt": attempt,
+                        "candidates": response.candidates,
+                    }
+                )
+                for candidate in response.candidates:
+                    unique_candidates.setdefault(self._candidate_key(candidate), candidate)
+                if response.candidates:
+                    ranking_target = {**target, "platform_id": exact_platform_id}
+                    ranked = rank_candidates(ranking_target, list(unique_candidates.values()))
+                    result = {
+                        "platform": platform,
+                        "status": determine_search_status(ranked, attempts),
+                        "queries": queries,
+                        "attempts": attempts,
+                        "candidates": ranked,
+                        "resolution": "official_platform_id",
+                    }
+                    self._append_trace({"event": "platform_search_complete", "result": result})
+                    if self.trace_dir:
+                        result["trace_path"] = str(self.trace_dir / "search-events.jsonl")
+                    return result
         for adapter in adapters:
             for query in queries:
                 response = adapter.search(
@@ -120,6 +284,11 @@ class SearchCoordinator:
                     key = self._candidate_key(candidate)
                     unique_candidates.setdefault(key, candidate)
         ranked = rank_candidates(target, list(unique_candidates.values()))
+        anchor_summary = self._resolve_uncertain_anchors(
+            platform, target, adapters, ranked, unique_candidates
+        )
+        if anchor_summary:
+            ranked = rank_candidates(target, list(unique_candidates.values()))
         result = {
             "platform": platform,
             "status": determine_search_status(ranked, attempts),
@@ -127,6 +296,8 @@ class SearchCoordinator:
             "attempts": attempts,
             "candidates": ranked,
         }
+        if anchor_summary:
+            result["anchor"] = anchor_summary
         self._append_trace({"event": "platform_search_complete", "result": result})
         if self.trace_dir:
             result["trace_path"] = str(self.trace_dir / "search-events.jsonl")
@@ -155,9 +326,21 @@ class SearchCoordinator:
         }
 
 
-def build_default_coordinator(work_dir: str | Path) -> SearchCoordinator:
+def build_default_coordinator(
+    work_dir: str | Path, *, enable_gandalf_anchor: bool = False
+) -> SearchCoordinator:
     work_dir = Path(work_dir).resolve()
-    coordinator = SearchCoordinator(trace_dir=work_dir / "traces")
+    anchor_client = None
+    if enable_gandalf_anchor:
+        try:
+            from ..adapters.gandalf_anchor import GandalfAnchorClient
+
+            anchor_client = GandalfAnchorClient()
+        except Exception:
+            anchor_client = None
+    coordinator = SearchCoordinator(
+        trace_dir=work_dir / "traces", anchor_client=anchor_client
+    )
     try:
         from ..adapters.musicdl_adapter import MusicDlAdapter
 

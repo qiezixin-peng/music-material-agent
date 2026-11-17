@@ -1,9 +1,9 @@
 {
-  "go": "go version go1.27.4 windows/amd64",
-  "music_lib_version": "v1.1.3-0.20261116090354-044c84bed714",
+  "sha256": "9708b512dba1aa7e772589712537f5ae94bf4f34731e84bddb43403012ceb7cf",
   "module": "music-material-agent/soda-agent-helper",
+  "music_lib_version": "v1.1.3-0.20261116090354-044c84bed714",
   "interface": "stdin/stdout JSON; no Web UI or listening port",
-  "music_lib_commit": "044c84bed714058863f04ca5e0128d18f02ebba5",
-  "sha256": "e539d023e34272484ddd005cc113b7992fc7c3fac3475d564309ab710b72862d",
-  "artifact": "bin/soda-agent-helper.exe"
+  "artifact": "bin/soda-agent-helper.exe",
+  "go": "go version go1.27.4 windows/amd64",
+  "music_lib_commit": "044c84bed714058863f04ca5e0128d18f02ebba5"
 }

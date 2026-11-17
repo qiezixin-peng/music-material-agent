@@ -154,6 +154,8 @@ class GoMusicDlAdapter:
             "local_signer_candidate": DEFAULT_SODA_CLIENT.is_dir(),
             "desktop_cookie_count": read_soda_client_cookie()[1],
             "cookie_sync_policy": "desktop_client_on_start",
+            "search_pages_per_query": 1,
+            "pagination_status": "upstream_helper_api_not_exposed",
         }
 
     def search(self, request: SearchRequest) -> SearchResponse:
@@ -272,27 +274,7 @@ class GoMusicDlAdapter:
                 )
             candidates = []
             for item in result.get("candidates") or []:
-                artists_raw = item.get("artist")
-                candidates.append(
-                    {
-                        "platform": "soda",
-                        "backend": "soda-agent-helper",
-                        "platform_id": str(item.get("id") or ""),
-                        "title_raw": item.get("name"),
-                        "artists_raw": artists_raw,
-                        "artists": split_artists(artists_raw),
-                        "album_raw": item.get("album"),
-                        "album_id": item.get("album_id"),
-                        "duration_s": float(item.get("duration") or 0) or None,
-                        "cover_url": item.get("cover"),
-                        "is_vip": bool(item.get("is_vip")),
-                        "backend_ref": {
-                            "source": "soda",
-                            "id": str(item.get("id") or ""),
-                            "extra": item.get("extra") or {},
-                        },
-                    }
-                )
+                candidates.append(self._candidate_from_helper(item))
             return SearchResponse(
                 backend="soda-agent-helper",
                 platform="soda",
@@ -302,7 +284,14 @@ class GoMusicDlAdapter:
                 pages_scanned=1,
                 exhaustive=False,
                 raw_trace_path=str(snapshot),
-                warnings=[] if candidates else ["Soda helper returned an empty non-exhaustive result"],
+                warnings=(
+                    ["Soda helper returned an empty non-exhaustive result"]
+                    if not candidates
+                    else []
+                )
+                + [
+                    "Soda helper currently scans one upstream page per query; query expansion and exact ID resolution remain enabled"
+                ],
             )
         except Exception as error:
             return SearchResponse(
@@ -310,6 +299,69 @@ class GoMusicDlAdapter:
                 platform="soda",
                 query=request.query,
                 status="SEARCH_UNAVAILABLE",
+                candidates=[],
+                exhaustive=False,
+                error=f"{type(error).__name__}: {error}"[:500],
+            )
+
+    @staticmethod
+    def _candidate_from_helper(item: dict[str, Any]) -> dict[str, Any]:
+        artists_raw = item.get("artist")
+        return {
+            "platform": "soda",
+            "backend": "soda-agent-helper",
+            "platform_id": str(item.get("id") or ""),
+            "title_raw": item.get("name"),
+            "artists_raw": artists_raw,
+            "artists": split_artists(artists_raw),
+            "album_raw": item.get("album"),
+            "album_id": item.get("album_id"),
+            "duration_s": float(item.get("duration") or 0) or None,
+            "cover_url": item.get("cover"),
+            "is_vip": bool(item.get("is_vip")),
+            "backend_ref": {
+                "source": "soda",
+                "id": str(item.get("id") or ""),
+                "extra": item.get("extra") or {},
+            },
+        }
+
+    def resolve_platform_id(self, platform_id: str) -> SearchResponse:
+        identifier = str(platform_id).strip()
+        try:
+            result = self._run_soda_helper(
+                {"operation": "resolve", "song": {"id": identifier}}, timeout=60
+            )
+            trace_result = {
+                key: value for key, value in result.items() if key != "desktop_cookie_count"
+            }
+            encoded = json.dumps(trace_result, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            digest = __import__("hashlib").sha256(encoded).hexdigest()
+            snapshot = self.work_dir / f"soda-helper-resolve-{identifier}-{digest[:12]}.json"
+            if not snapshot.exists():
+                snapshot.write_bytes(encoded)
+            items = result.get("candidates") or []
+            candidates = [self._candidate_from_helper(item) for item in items]
+            status = "OK" if result.get("status") == "OK" and candidates else str(
+                result.get("status") or "RESOLVE_UNAVAILABLE"
+            )
+            return SearchResponse(
+                backend="soda-agent-helper",
+                platform="soda",
+                query=f"id:{identifier}",
+                status=status,
+                candidates=candidates,
+                pages_scanned=1 if candidates else 0,
+                exhaustive=False,
+                error=None if candidates else str(result.get("error") or "Soda ID resolve failed")[:500],
+                raw_trace_path=str(snapshot),
+            )
+        except Exception as error:
+            return SearchResponse(
+                backend="soda-agent-helper",
+                platform="soda",
+                query=f"id:{identifier}",
+                status="RESOLVE_UNAVAILABLE",
                 candidates=[],
                 exhaustive=False,
                 error=f"{type(error).__name__}: {error}"[:500],

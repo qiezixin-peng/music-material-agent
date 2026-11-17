@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 from datetime import datetime
 from uuid import uuid4
@@ -49,7 +50,7 @@ def export_job_xlsx(job_id: str, filename: str | None = None, allow_partial: boo
 
 @mcp.tool()
 def download_verified_candidate(job_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
-    """Resolve an opaque go-music-dl candidate, then keep it only after signature and FFprobe verification."""
+    """Resolve an opaque backend candidate, then keep it only after signature and FFprobe verification."""
     return service.download_candidate(job_id, candidate)
 
 
@@ -108,9 +109,13 @@ def search_track_everywhere(
     platforms: list[str] | None = None,
     page_limit: int = 5,
     max_queries: int = 12,
+    platform_ids: dict[str, str] | None = None,
+    use_gandalf_anchor: bool = True,
 ) -> dict[str, Any]:
-    """Search installed native backends across platforms with query expansion and full traces."""
-    coordinator = build_default_coordinator(_new_search_runtime())
+    """Search native backends with query expansion; Gandalf is consulted only below the confidence threshold and every ID is officially re-resolved."""
+    coordinator = build_default_coordinator(
+        _new_search_runtime(), enable_gandalf_anchor=use_gandalf_anchor
+    )
     target: dict[str, Any] = {"title": title}
     if artists is not None:
         target["artists"] = artists
@@ -118,12 +123,26 @@ def search_track_everywhere(
         target["album"] = album
     if duration_s is not None:
         target["duration_s"] = duration_s
+    if platform_ids:
+        target["platform_ids"] = platform_ids
     return coordinator.search_everywhere(
         target,
         platforms=platforms or ("soda", "netease", "qq", "kugou", "kuwo"),
         page_limit=page_limit,
         max_queries=max_queries,
     )
+
+
+@mcp.tool()
+def resolve_soda_track_id(platform_id: str, job_id: str | None = None) -> dict[str, Any]:
+    """Resolve a Soda platform ID through the official signed client path; anchor names are never accepted as metadata."""
+    from .adapters.go_music_dl_adapter import GoMusicDlAdapter
+
+    if job_id:
+        work_dir = service.paths.trace_dir(job_id) / "raw" / "soda-id-resolve"
+    else:
+        work_dir = _new_search_runtime() / "soda-id-resolve"
+    return asdict(GoMusicDlAdapter(work_dir).resolve_platform_id(platform_id))
 
 
 @mcp.tool()

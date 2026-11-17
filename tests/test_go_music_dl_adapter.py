@@ -87,3 +87,33 @@ def test_soda_helper_search_maps_candidates_without_cookie_trace(tmp_path: Path,
     trace = Path(response.raw_trace_path).read_text(encoding="utf-8")
     assert "sessionid" not in trace
     assert "secret" not in trace
+
+
+def test_soda_helper_resolves_platform_id_through_official_metadata(tmp_path: Path, monkeypatch) -> None:
+    helper = tmp_path / "soda-agent-helper.exe"
+    helper.write_bytes(b"test")
+    monkeypatch.setattr(go_music_dl_adapter, "DEFAULT_SODA_HELPER", helper)
+    monkeypatch.setattr(
+        go_music_dl_adapter, "read_soda_client_cookie", lambda: ("sessionid=secret", 1)
+    )
+    payload = {
+        "status": "OK",
+        "candidates": [
+            {"id": "6705003948140398594", "name": "海阔天空", "artist": "Beyond"}
+        ],
+    }
+
+    def fake_run(*args, **kwargs):
+        request = json.loads(kwargs["input"].decode("utf-8"))
+        assert request["operation"] == "resolve"
+        assert request["song"]["id"] == "6705003948140398594"
+        return subprocess.CompletedProcess(args[0], 0, json.dumps(payload, ensure_ascii=False).encode(), b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    response = GoMusicDlAdapter(tmp_path / "trace").resolve_platform_id(
+        "6705003948140398594"
+    )
+
+    assert response.status == "OK"
+    assert response.candidates[0]["title_raw"] == "海阔天空"
+    assert response.candidates[0]["artists_raw"] == "Beyond"
