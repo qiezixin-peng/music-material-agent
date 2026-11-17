@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
@@ -254,9 +255,7 @@ def run_platform_collection(
         limit=max_rows,
         retry_technical=retry_technical,
     )
-    processed: list[dict[str, Any]] = []
-    for row in pending:
-        row_id = row["row_id"]
+    def search_row(row: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         target = target_from_row(row["data"], platform, spec.get("column_map"))
         platform_ids = target.get("platform_ids") or {}
         if not target.get("title") and platform_ids.get(platform):
@@ -295,6 +294,18 @@ def run_platform_collection(
                     }],
                     "candidates": [],
                 }
+        return target, result
+
+    row_results: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    with ThreadPoolExecutor(max_workers=max(1, min(len(pending), 12))) as pool:
+        futures = {pool.submit(search_row, row): row["row_id"] for row in pending}
+        for future in as_completed(futures):
+            row_results[futures[future]] = future.result()
+
+    processed: list[dict[str, Any]] = []
+    for row in pending:
+        row_id = row["row_id"]
+        target, result = row_results[row_id]
         candidates = result.get("candidates") or []
         requested_fields = spec.get("requested_fields") if isinstance(spec.get("requested_fields"), list) else []
         data = _observation_data(candidates[0], requested_fields) if candidates else {}

@@ -9,6 +9,8 @@ import subprocess
 import time
 import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -185,6 +187,7 @@ class GoMusicDlAdapter:
         self._base_url = base_url
         persistent_state = Path(state_dir).resolve() if state_dir else ProjectPaths.defaults().data_root / "go-music-dl"
         self._service = None if base_url else GoMusicDlService(persistent_state)
+        self._enrichment_cache: dict[str, dict[str, Any]] = {}
 
     def health(self) -> dict[str, Any]:
         return {
@@ -403,13 +406,20 @@ class GoMusicDlAdapter:
         identifier = str(candidate.get("platform_id") or "").strip()
         if not identifier:
             return candidate
-        response = self.resolve_platform_id(identifier)
-        if not response.candidates:
-            time.sleep(0.5)
+        if identifier in self._enrichment_cache:
+            cached = deepcopy(self._enrichment_cache[identifier])
+            for key in ("match_score", "match_components", "match_reasons", "anchor_evidence"):
+                if key in candidate:
+                    cached[key] = candidate[key]
+            return cached
+        resolved = candidate
+        if not candidate.get("_officially_resolved"):
             response = self.resolve_platform_id(identifier)
-        if not response.candidates:
-            return candidate
-        resolved = response.candidates[0]
+            if not response.candidates:
+                response = self.resolve_platform_id(identifier)
+            if not response.candidates:
+                return candidate
+            resolved = response.candidates[0]
         if str(resolved.get("platform_id") or "") != identifier:
             return candidate
         merged = {**candidate}
@@ -429,47 +439,86 @@ class GoMusicDlAdapter:
         ):
             if resolved.get(field) not in (None, "", []):
                 merged[field] = resolved[field]
-        try:
-            share = get_soda_share_links("track", identifier, self.work_dir / "share")
+
+        album_id = str(merged.get("album_id") or "").strip()
+        artist_ids = [str(value) for value in (merged.get("artist_ids") or []) if str(value)]
+
+        def fetch_lyric() -> dict[str, Any]:
+            return self._run_soda_helper(
+                {"operation": "lyric", "song": {"id": identifier}}, timeout=45
+            )
+
+        def fetch_artist_images() -> dict[str, Any]:
+            from .artist_images import enrich_primary_artist_images
+
+            return enrich_primary_artist_images(
+                "soda", artist_ids, self.work_dir / "artist-detail"
+            )
+
+        jobs: dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=max(2, min(5 + len(artist_ids), 12))) as pool:
+            jobs["share:track"] = pool.submit(
+                get_soda_share_links, "track", identifier, self.work_dir / "share"
+            )
+            if album_id:
+                jobs["share:album"] = pool.submit(
+                    get_soda_share_links, "album", album_id, self.work_dir / "share"
+                )
+            for artist_id in artist_ids:
+                jobs[f"share:artist:{artist_id}"] = pool.submit(
+                    get_soda_share_links, "artist", artist_id, self.work_dir / "share"
+                )
+            jobs["lyric"] = pool.submit(fetch_lyric)
+            jobs["artist_images"] = pool.submit(fetch_artist_images)
+            outcomes: dict[str, Any] = {}
+            errors: dict[str, str] = {}
+            for name, future in jobs.items():
+                try:
+                    outcomes[name] = future.result()
+                except Exception as error:
+                    errors[name] = f"{type(error).__name__}: {error}"[:500]
+
+        evidence = list(merged.get("metadata_evidence") or [])
+        share_evidence = list(merged.get("share_evidence") or [])
+        share = outcomes.get("share:track")
+        if isinstance(share, dict):
             merged["song_url"] = share["system_share_url"]
             merged["song_short_share_url"] = share["short_share_url"]
             merged["song_copied_share_text"] = share["copied_share_text"]
-            evidence = list(merged.get("metadata_evidence") or [])
             evidence.append({"field": "song_url", "source": share["source"]})
-            merged["metadata_evidence"] = evidence
             if share.get("evidence"):
-                merged["share_evidence"] = [share["evidence"]]
-            album_id = str(merged.get("album_id") or "").strip()
-            if album_id:
-                album_share = get_soda_share_links("album", album_id, self.work_dir / "share")
-                merged["album_url"] = album_share["system_share_url"]
-                merged["album_short_share_url"] = album_share["short_share_url"]
-                merged["album_copied_share_text"] = album_share["copied_share_text"]
-                evidence.append({"field": "album_url", "source": album_share["source"]})
-                if album_share.get("evidence"):
-                    merged.setdefault("share_evidence", []).append(album_share["evidence"])
-            artist_urls: list[str] = []
-            artist_short_urls: list[str] = []
-            artist_share_texts: list[str] = []
-            for artist_id in merged.get("artist_ids") or []:
-                artist_share = get_soda_share_links("artist", str(artist_id), self.work_dir / "share")
+                share_evidence.append(share["evidence"])
+        album_share = outcomes.get("share:album")
+        if isinstance(album_share, dict):
+            merged["album_url"] = album_share["system_share_url"]
+            merged["album_short_share_url"] = album_share["short_share_url"]
+            merged["album_copied_share_text"] = album_share["copied_share_text"]
+            evidence.append({"field": "album_url", "source": album_share["source"]})
+            if album_share.get("evidence"):
+                share_evidence.append(album_share["evidence"])
+        artist_urls: list[str] = []
+        artist_short_urls: list[str] = []
+        artist_share_texts: list[str] = []
+        for artist_id in artist_ids:
+            artist_share = outcomes.get(f"share:artist:{artist_id}")
+            if isinstance(artist_share, dict):
                 artist_urls.append(artist_share["system_share_url"])
                 artist_short_urls.append(artist_share["short_share_url"])
                 artist_share_texts.append(artist_share["copied_share_text"])
                 if artist_share.get("evidence"):
-                    merged.setdefault("share_evidence", []).append(artist_share["evidence"])
-            if artist_urls:
-                merged["artist_homepage_url"] = artist_urls[0]
-                merged["artist_homepage_urls"] = artist_urls
-                merged["artist_short_share_urls"] = artist_short_urls
-                merged["artist_copied_share_texts"] = artist_share_texts
-                evidence.append({"field": "artist_homepage_urls", "source": "soda.GetShareInfo.share_info"})
-        except Exception as error:
-            merged["share_link_error"] = f"{type(error).__name__}: {error}"[:500]
-        try:
-            lyric_result = self._run_soda_helper(
-                {"operation": "lyric", "song": {"id": identifier}}, timeout=45
-            )
+                    share_evidence.append(artist_share["evidence"])
+        if artist_urls:
+            merged["artist_homepage_url"] = artist_urls[0]
+            merged["artist_homepage_urls"] = artist_urls
+            merged["artist_short_share_urls"] = artist_short_urls
+            merged["artist_copied_share_texts"] = artist_share_texts
+            evidence.append({"field": "artist_homepage_urls", "source": "soda.GetShareInfo.share_info"})
+        if errors:
+            merged["share_link_error"] = "; ".join(
+                f"{key}={value}" for key, value in errors.items() if key.startswith("share:")
+            )[:500] or None
+        lyric_result = outcomes.get("lyric")
+        if isinstance(lyric_result, dict):
             timed = str(lyric_result.get("lyric") or "").strip()
             if lyric_result.get("status") == "OK" and timed:
                 from ..lyrics import detect_lyric_language, plain_lyric
@@ -483,23 +532,24 @@ class GoMusicDlAdapter:
                         **detect_lyric_language(timed),
                     }
                 )
-        except Exception as error:
-            merged["lyric_error"] = f"{type(error).__name__}: {error}"[:500]
-        try:
-            from .artist_images import enrich_primary_artist_images
-
-            artist_images = enrich_primary_artist_images(
-                "soda", list(merged.get("artist_ids") or []), self.work_dir / "artist-detail"
-            )
+        elif errors.get("lyric"):
+            merged["lyric_error"] = errors["lyric"]
+        artist_images = outcomes.get("artist_images")
+        if isinstance(artist_images, dict):
             merged.update({key: value for key, value in artist_images.items() if value})
-        except Exception as error:
-            merged["artist_image_error"] = f"{type(error).__name__}: {error}"[:500]
+        elif errors.get("artist_images"):
+            merged["artist_image_error"] = errors["artist_images"]
+        if evidence:
+            merged["metadata_evidence"] = evidence
+        if share_evidence:
+            merged["share_evidence"] = share_evidence
         company = str(merged.get("release_company_raw") or "").strip()
         company_kind = str(merged.get("release_company_kind") or "")
         if company and company_kind in {"platform_company", "platform_publish_company", "label"}:
             merged["release_label"] = company
         elif company and "copyright" in company_kind:
             merged["rights_holder_raw"] = company
+        self._enrichment_cache[identifier] = deepcopy(merged)
         return merged
 
     def resolve_platform_id(self, platform_id: str) -> SearchResponse:
@@ -516,6 +566,8 @@ class GoMusicDlAdapter:
                 snapshot.write_bytes(encoded)
             items = result.get("candidates") or []
             candidates = [self._candidate_from_helper(item) for item in items]
+            for candidate in candidates:
+                candidate["_officially_resolved"] = True
             status = "OK" if result.get("status") == "OK" and candidates else str(
                 result.get("status") or "RESOLVE_UNAVAILABLE"
             )

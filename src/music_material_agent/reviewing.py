@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
@@ -74,8 +75,8 @@ def run_review_batch(
         enable_gandalf_anchor=context["spec"].get("gandalf_policy") == "uncertain_only",
     )
     rows = service.get_review_rows(review_id, limit=max_rows)
-    processed: list[dict[str, Any]] = []
-    for row in rows:
+
+    def research_row(row: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         target = target_from_row(
             row["data"], context["source_platform"], context["spec"].get("column_map")
         )
@@ -110,6 +111,17 @@ def run_review_batch(
                     }],
                     "candidates": [],
                 }
+        return target, fresh
+
+    researched: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    with ThreadPoolExecutor(max_workers=max(1, min(len(rows), 12))) as pool:
+        futures = {pool.submit(research_row, row): row["row_id"] for row in rows}
+        for future in as_completed(futures):
+            researched[futures[future]] = future.result()
+
+    processed: list[dict[str, Any]] = []
+    for row in rows:
+        target, fresh = researched[row["row_id"]]
         verdict, patch = _review_decision(
             row["source_status"], row["source_observation"], fresh
         )

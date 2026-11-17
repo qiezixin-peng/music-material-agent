@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from threading import Lock
 from typing import Any, Iterable
 
 from ..adapters.base import PlatformAdapter, SearchRequest
@@ -26,6 +28,7 @@ class SearchCoordinator:
         self.trace_dir = Path(trace_dir).resolve() if trace_dir else None
         self.anchor_client = anchor_client
         self.anchor_trigger_score = anchor_trigger_score
+        self._trace_lock = Lock()
         if self.trace_dir:
             self.trace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -33,8 +36,9 @@ class SearchCoordinator:
         if not self.trace_dir:
             return
         payload = {"at": datetime.now().astimezone().isoformat(), **record}
-        with (self.trace_dir / "search-events.jsonl").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+        with self._trace_lock:
+            with (self.trace_dir / "search-events.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
 
     def register(self, adapter: PlatformAdapter) -> None:
         if adapter.platform not in PLATFORMS:
@@ -432,15 +436,24 @@ class SearchCoordinator:
         max_queries: int = 12,
     ) -> dict[str, Any]:
         selected = list(dict.fromkeys(platforms))
-        return {
-            "target": target,
-            "platforms": {
-                platform: self.search_platform(
+        results: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=max(1, len(selected))) as pool:
+            futures = {
+                pool.submit(
+                    self.search_platform,
                     platform,
                     target,
                     page_limit=page_limit,
                     max_queries=max_queries,
-                )
+                ): platform
+                for platform in selected
+            }
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+        return {
+            "target": target,
+            "platforms": {
+                platform: results[platform]
                 for platform in selected
             },
         }

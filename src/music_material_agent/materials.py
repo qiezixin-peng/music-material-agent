@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from .collection import _safe_error
@@ -41,40 +42,49 @@ def run_material_batch(
         limit=max(1, min(int(max_rows), 100)),
         retry_failed=retry_failed,
     )
+    def collect_one(row: dict[str, Any], kind: str) -> dict[str, Any]:
+        data = row["observation"]
+        try:
+            if kind in {"lyric_timed", "lyric_plain"}:
+                lyric = data.get(ASSET_FIELDS[kind])
+                if not isinstance(lyric, str) or not lyric.strip():
+                    return {"status": "NOT_AVAILABLE", "error": "Native candidate has no inline lyric"}
+                return service.save_lyric(job_id, row["row_id"], platform, lyric, kind=kind)
+            if kind in {"song_cover", "album_cover", "avatar"}:
+                singular = data.get(ASSET_FIELDS[kind])
+                plural = data.get(f"{ASSET_FIELDS[kind]}s")
+                urls = plural if isinstance(plural, list) and plural else singular
+                if not isinstance(urls, (str, list)) or not urls:
+                    return {"status": "NOT_AVAILABLE", "error": f"Native candidate has no {kind} URL"}
+                return service.download_best_image(
+                    job_id, row["row_id"], platform, kind, urls,
+                    min_width=image_min_width, min_height=image_min_height,
+                    exact_width=image_exact_width, exact_height=image_exact_height,
+                    resize_mode=image_resize_mode,
+                )
+            if kind == "audio":
+                if not data.get("platform_id"):
+                    return {"status": "NOT_AVAILABLE", "error": "Candidate has no platform ID"}
+                return service.download_candidate(job_id, data)
+            raise ValueError(kind)  # pragma: no cover - caller controls kinds
+        except Exception as error:
+            return {"status": "DOWNLOAD_FAILED", "error": _safe_error(error)}
+
+    completed: dict[tuple[str, str], dict[str, Any]] = {}
+    tasks = [(row, kind) for row in rows for kind in row["pending_kinds"]]
+    with ThreadPoolExecutor(max_workers=max(1, min(len(tasks), 16))) as pool:
+        futures = {
+            pool.submit(collect_one, row, kind): (row["row_id"], kind)
+            for row, kind in tasks
+        }
+        for future in as_completed(futures):
+            completed[futures[future]] = future.result()
+
     processed: list[dict[str, Any]] = []
     for row in rows:
-        data = row["observation"]
         results: dict[str, str] = {}
         for kind in row["pending_kinds"]:
-            try:
-                if kind in {"lyric_timed", "lyric_plain"}:
-                    lyric = data.get(ASSET_FIELDS[kind])
-                    if not isinstance(lyric, str) or not lyric.strip():
-                        result = {"status": "NOT_AVAILABLE", "error": "Native candidate has no inline lyric"}
-                    else:
-                        result = service.save_lyric(job_id, row["row_id"], platform, lyric, kind=kind)
-                elif kind in {"song_cover", "album_cover", "avatar"}:
-                    singular = data.get(ASSET_FIELDS[kind])
-                    plural = data.get(f"{ASSET_FIELDS[kind]}s")
-                    urls = plural if isinstance(plural, list) and plural else singular
-                    if not isinstance(urls, (str, list)) or not urls:
-                        result = {"status": "NOT_AVAILABLE", "error": f"Native candidate has no {kind} URL"}
-                    else:
-                        result = service.download_best_image(
-                            job_id, row["row_id"], platform, kind, urls,
-                            min_width=image_min_width, min_height=image_min_height,
-                            exact_width=image_exact_width, exact_height=image_exact_height,
-                            resize_mode=image_resize_mode,
-                        )
-                elif kind == "audio":
-                    if not data.get("platform_id"):
-                        result = {"status": "NOT_AVAILABLE", "error": "Candidate has no platform ID"}
-                    else:
-                        result = service.download_candidate(job_id, data)
-                else:  # pragma: no cover - caller controls kinds
-                    raise ValueError(kind)
-            except Exception as error:
-                result = {"status": "DOWNLOAD_FAILED", "error": _safe_error(error)}
+            result = completed[(row["row_id"], kind)]
             service.record_material(
                 job_id,
                 row["row_id"],

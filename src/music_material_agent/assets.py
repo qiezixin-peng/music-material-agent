@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import re
 from typing import Any
@@ -148,18 +149,27 @@ def download_best_image(
         raise ValueError("exact_width and exact_height must be provided together")
     if resize_mode not in {"cover", "contain", "stretch"}:
         raise ValueError("resize_mode must be cover, contain or stretch")
-    attempts: list[dict[str, Any]] = []
-    for index, url in enumerate(image_url_candidates(platform, urls)):
+    candidates = image_url_candidates(platform, urls)
+
+    def fetch_candidate(index: int, url: str) -> tuple[int, dict[str, Any]]:
         last_error: Exception | None = None
         for retry in range(3):
             try:
                 result = download_asset(url, staging_dir, output_dir, f"{stem}-candidate-{index}", kind)
-                attempts.append({**result, "retry_count": retry})
-                break
+                return index, {**result, "retry_count": retry}
             except Exception as error:
                 last_error = error
-        else:
-            attempts.append({"status": "DOWNLOAD_FAILED", "source_url": url, "retry_count": 2, "error": f"{type(last_error).__name__}: {last_error}"[:500]})
+        return index, {"status": "DOWNLOAD_FAILED", "source_url": url, "retry_count": 2, "error": f"{type(last_error).__name__}: {last_error}"[:500]}
+
+    indexed_attempts: list[tuple[int, dict[str, Any]]] = []
+    with ThreadPoolExecutor(max_workers=max(1, min(len(candidates), 8))) as pool:
+        futures = {
+            pool.submit(fetch_candidate, index, url): index
+            for index, url in enumerate(candidates)
+        }
+        for future in as_completed(futures):
+            indexed_attempts.append(future.result())
+    attempts = [item for _, item in sorted(indexed_attempts, key=lambda pair: pair[0])]
     valid = [item for item in attempts if item.get("valid")]
     eligible = [item for item in valid if (not min_width or int(item.get("width") or 0) >= min_width) and (not min_height or int(item.get("height") or 0) >= min_height)]
     if not eligible:

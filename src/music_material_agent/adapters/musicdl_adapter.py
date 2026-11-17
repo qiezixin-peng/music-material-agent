@@ -7,6 +7,8 @@ import os
 import re
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from threading import Lock
 from pathlib import Path
 from typing import Any, Callable
@@ -337,6 +339,7 @@ class MusicDlAdapter:
         self._client: Any | None = None
         self._search_lock = Lock()
         self._last_official_request_at = 0.0
+        self._enrichment_cache: dict[str, dict[str, Any]] = {}
 
     def _pace_official_request(self, minimum_interval_s: float) -> None:
         elapsed = time.monotonic() - self._last_official_request_at
@@ -477,34 +480,56 @@ class MusicDlAdapter:
         """Read the accepted track's official album detail for release metadata."""
         if self.platform not in {"netease", "qq", "kugou", "kuwo"}:
             return candidate
-        enriched = {**candidate}
         identifier = str(candidate.get("platform_id") or "").strip()
-        if identifier:
+        if identifier and identifier in self._enrichment_cache:
+            cached = deepcopy(self._enrichment_cache[identifier])
+            for key in ("match_score", "match_components", "match_reasons", "anchor_evidence"):
+                if key in candidate:
+                    cached[key] = candidate[key]
+            return cached
+        enriched = {**candidate}
+
+        def fetch_lyric() -> dict[str, Any]:
+            if not identifier:
+                return {}
             try:
                 from ..lyrics import fetch_platform_lyric
 
-                enriched.update(fetch_platform_lyric(self.platform, identifier))
+                return fetch_platform_lyric(self.platform, identifier)
             except Exception as error:
-                enriched["lyric_error"] = f"{type(error).__name__}: {error}"[:500]
+                return {"lyric_error": f"{type(error).__name__}: {error}"[:500]}
+
+        def fetch_artist_images() -> dict[str, Any]:
+            try:
+                from .artist_images import enrich_primary_artist_images
+
+                return enrich_primary_artist_images(
+                    self.platform,
+                    list(candidate.get("artist_ids") or []),
+                    self.work_dir / "artist-detail",
+                )
+            except Exception as error:
+                return {"artist_image_error": f"{type(error).__name__}: {error}"[:500]}
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            lyric_future = pool.submit(fetch_lyric)
+            artist_future = pool.submit(fetch_artist_images)
+            enriched.update({key: value for key, value in lyric_future.result().items() if value})
+            enriched.update({key: value for key, value in artist_future.result().items() if value})
         cover = candidate.get("cover_url")
         if cover:
             enriched.setdefault("song_cover_url", cover)
             enriched.setdefault("album_cover_url", cover)
-        try:
-            from .artist_images import enrich_primary_artist_images
-
-            artist_images = enrich_primary_artist_images(
-                self.platform, list(candidate.get("artist_ids") or []), self.work_dir / "artist-detail"
-            )
-            enriched.update({key: value for key, value in artist_images.items() if value})
-        except Exception as error:
-            enriched["artist_image_error"] = f"{type(error).__name__}: {error}"[:500]
         album_id = str(candidate.get("album_id") or "").strip()
         if not album_id:
+            if identifier:
+                self._enrichment_cache[identifier] = deepcopy(enriched)
             return enriched
         from .go_music_dl_adapter import DEFAULT_SODA_CLIENT, DEFAULT_SODA_HELPER
 
         if not DEFAULT_SODA_HELPER.is_file():
+            if identifier:
+                self._enrichment_cache[identifier] = deepcopy(enriched)
             return enriched
         payload = {
             "operation": "album_metadata",
@@ -524,10 +549,14 @@ class MusicDlAdapter:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if not completed.stdout:
+            if identifier:
+                self._enrichment_cache[identifier] = deepcopy(enriched)
             return enriched
         result = json.loads(completed.stdout.decode("utf-8"))
         metadata = result.get("album_metadata")
         if result.get("status") != "OK" or not isinstance(metadata, dict):
+            if identifier:
+                self._enrichment_cache[identifier] = deepcopy(enriched)
             return enriched
         if str(metadata.get("platform") or "") != self.platform:
             return enriched
@@ -596,6 +625,8 @@ class MusicDlAdapter:
             enriched["metadata_evidence"] = list(
                 {json.dumps(item, sort_keys=True): item for item in evidence}.values()
             )
+        if identifier:
+            self._enrichment_cache[identifier] = deepcopy(enriched)
         return enriched
 
     def resolve_platform_id(self, platform_id: str) -> SearchResponse:
