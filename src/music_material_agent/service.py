@@ -103,6 +103,38 @@ class MusicMaterialService:
             self._event(connection, job_id, "ASSET_DOWNLOAD", {"row_id": row_id, "platform": platform, "kind": kind, "result": result}, actor="agent")
         return result
 
+    def save_lyric(self, job_id: str, row_id: str, platform: str, lyric: str) -> dict[str, Any]:
+        """Save inline platform lyrics with the same durable audit trail as URL assets."""
+        if platform not in PLATFORMS:
+            raise ValueError(f"Unsupported platform: {platform}")
+        with self.database.connect() as connection:
+            job = connection.execute("SELECT trace_dir,output_dir FROM jobs WHERE id=?", (job_id,)).fetchone()
+            row = connection.execute("SELECT 1 FROM job_rows WHERE job_id=? AND row_id=?", (job_id, row_id)).fetchone()
+        if not job or not row:
+            raise KeyError((job_id, row_id))
+        from .assets import save_lyric_text
+
+        result = save_lyric_text(
+            lyric,
+            Path(job["trace_dir"]) / "downloads" / "assets",
+            Path(job["output_dir"]) / "assets" / platform / "lyric",
+            row_id,
+        )
+        with self.database.transaction(immediate=True) as connection:
+            self._event(
+                connection,
+                job_id,
+                "LYRIC_TEXT_SAVED",
+                {
+                    "row_id": row_id,
+                    "platform": platform,
+                    # The trace records integrity metadata, not a duplicate of the full lyric.
+                    "result": result,
+                },
+                actor="agent",
+            )
+        return result
+
     def _event(
         self,
         connection: Any,

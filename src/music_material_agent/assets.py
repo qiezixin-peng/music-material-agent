@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -9,6 +10,38 @@ import httpx
 
 
 IMAGE_SIGNATURES = ((b"\xff\xd8\xff", ".jpg"), (b"\x89PNG\r\n\x1a\n", ".png"), (b"GIF87a", ".gif"), (b"GIF89a", ".gif"), (b"RIFF", ".webp"))
+MAX_LYRIC_BYTES = 5 * 1024 * 1024
+
+
+def save_lyric_text(
+    lyric: str, staging_dir: str | Path, output_dir: str | Path, stem: str
+) -> dict[str, Any]:
+    """Atomically persist inline lyrics after bounded text validation."""
+    if not isinstance(lyric, str) or not lyric.strip():
+        raise ValueError("Lyric text must not be empty")
+    encoded = lyric.encode("utf-8")
+    if len(encoded) > MAX_LYRIC_BYTES:
+        raise ValueError("Lyric exceeds size limit")
+    if lyric.lstrip().casefold().startswith(("<html", "<!doctype")):
+        raise ValueError("Lyric content is HTML")
+    staging = Path(staging_dir).resolve()
+    output = Path(output_dir).resolve()
+    staging.mkdir(parents=True, exist_ok=True)
+    output.mkdir(parents=True, exist_ok=True)
+    partial = staging / f"{stem}-lyric.part"
+    extension = ".lrc" if re.search(r"(?m)^\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?]", lyric) else ".txt"
+    target = output / f"{stem}-lyric{extension}"
+    partial.write_bytes(encoded)
+    partial.replace(target)
+    return {
+        "status": "SAVED_VERIFIED",
+        "valid": True,
+        "path": str(target),
+        "size_bytes": len(encoded),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "format": extension.removeprefix("."),
+        "error": None,
+    }
 
 
 def download_asset(url: str, staging_dir: str | Path, output_dir: str | Path, stem: str, kind: str) -> dict[str, Any]:

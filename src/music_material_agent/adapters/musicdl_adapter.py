@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .base import SearchRequest, SearchResponse
+from .musicdl_enrichment import extract_musicdl_enrichment
 from ..searching.planner import split_artists
 
 
@@ -43,7 +44,7 @@ def _classify_error(message: str) -> str:
 def song_info_to_candidate(song: Any, platform: str) -> dict[str, Any]:
     """Convert musicdl SongInfo without leaking expiring download URLs into job logs."""
     artists_raw = getattr(song, "singers", None)
-    return {
+    candidate = {
         "platform": platform,
         "backend": "musicdl",
         "platform_id": str(getattr(song, "identifier", "") or ""),
@@ -66,6 +67,8 @@ def song_info_to_candidate(song: Any, platform: str) -> dict[str, Any]:
         },
         "root_source": getattr(song, "root_source", None),
     }
+    candidate.update(extract_musicdl_enrichment(getattr(song, "raw_data", None), platform))
+    return candidate
 
 
 class MusicDlAdapter:

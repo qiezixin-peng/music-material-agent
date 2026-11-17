@@ -23,6 +23,8 @@
 - Gandalf 仅在原生结果低于置信度门槛时可选触发，最多提供待验证的平台 ID；每个 ID 必须回到平台官方接口解析成功，其记录名称永不覆盖平台原始字段。
 - 音频先进入临时 staging，经文件签名、SHA-256、FFprobe 音频流和时长验真后才进入正式输出。
 - 封面、头像和歌词下载带类型、大小和 HTML 错误页检查。
+- `musicdl` 原始响应采用字段白名单提取：网易云/酷狗发行日期、酷狗/酷我歌手头像会保留字段来源，但整份响应、密钥形字段和短期 URL 不进入任务记录。
+- 原生接口直接返回的歌词文本可由 `save_verified_lyric_text` 验证后原子落盘；事件只记录路径、大小与 SHA-256，不复制整篇歌词。
 - 最终 XLSX 同时导出源行、五平台原始字段、证据和逐行复核结论。
 
 `musicdl 2.14.2` 始终是五平台主干后端；无界面汽水 helper 是针对客户端登录态、PC 签名搜索和音频下载的补强层，Scrapling 负责网页证据。三者的候选统一进入同一评分、留痕和复核流程。任何非穷尽空结果都不会被报告为平台不存在。
@@ -47,6 +49,8 @@ uv run music-material mcp-http --host 127.0.0.1 --port 8766
 账号、密码和 Cookie 不写入任务表、日志、MCP 参数或 Git。汽水 Cookie 仅通过 helper 的标准输入在内存中传递；签名身份写入被 Git 忽略的本机运行数据目录。正常工作流不需要扫码登录。
 
 `mcp-http` 提供 `http://127.0.0.1:8766/mcp`，可由多个 Agent 窗口共享；stdio 模式保留给只支持本地进程型 MCP 的客户端。
+
+物料工具分为两类：`download_verified_asset` 处理封面、头像或远程歌词 URL；`save_verified_lyric_text` 处理 `musicdl` 候选中已经内联返回的歌词。两者都先写 staging，通过验证后才移动到正式任务输出。
 
 Agent 的硬性操作规则见 [AGENTS.md](AGENTS.md)，架构与可信度边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 

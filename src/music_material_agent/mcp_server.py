@@ -61,6 +61,14 @@ def download_verified_asset(job_id: str, row_id: str, platform: str, kind: str, 
 
 
 @mcp.tool()
+def save_verified_lyric_text(
+    job_id: str, row_id: str, platform: str, lyric: str
+) -> dict[str, Any]:
+    """Persist inline lyrics from a native candidate with size, HTML and hash validation."""
+    return service.save_lyric(job_id, row_id, platform, lyric)
+
+
+@mcp.tool()
 def expand_search_queries(
     title: str,
     artists: list[str] | str | None = None,
