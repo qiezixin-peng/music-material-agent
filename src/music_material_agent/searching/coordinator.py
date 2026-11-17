@@ -9,7 +9,8 @@ from typing import Any, Iterable
 from ..adapters.base import PlatformAdapter, SearchRequest
 from ..constants import PLATFORMS
 from .planner import expand_queries, normalize_text, split_artists
-from .ranking import rank_candidates
+from .identifiers import valid_platform_id
+from .ranking import partition_ranked_candidates, rank_candidates
 from .status import determine_search_status
 
 
@@ -122,9 +123,13 @@ class SearchCoordinator:
         anchor_items = anchor_result.get("candidates") or []
         proxies = []
         by_platform_id: dict[str, dict[str, Any]] = {}
+        invalid_platform_ids = 0
         for item in anchor_items:
             identifier = str(item.get("platform_id") or "").strip()
-            if not identifier or identifier in by_platform_id:
+            if not valid_platform_id(platform, identifier):
+                invalid_platform_ids += 1
+                continue
+            if identifier in by_platform_id:
                 continue
             proxy = {
                 "platform_id": identifier,
@@ -135,9 +140,20 @@ class SearchCoordinator:
             proxies.append(proxy)
             by_platform_id[identifier] = item
         ranked_anchors = rank_candidates(target, proxies)
-        selected = [
-            item for item in ranked_anchors if float(item.get("match_score") or 0) >= 0.45
-        ][:10]
+        selected = []
+        for item in ranked_anchors:
+            components = item.get("match_components") or {}
+            title_score = float(components.get("title") or 0)
+            artist_score = float(components.get("artists") or 0)
+            overall = float(item.get("match_score") or 0)
+            if (
+                overall >= 0.55
+                or (title_score >= 0.30 and artist_score >= 0.70)
+                or (title_score >= 0.20 and artist_score >= 0.95)
+            ):
+                selected.append(item)
+            if len(selected) >= 10:
+                break
         summary: dict[str, Any] = {
             "policy": "uncertain_only_official_recheck",
             "status": anchor_result.get("status"),
@@ -145,6 +161,7 @@ class SearchCoordinator:
             "returned_count": len(anchor_items),
             "selected_for_recheck": len(selected),
             "officially_verified": 0,
+            "invalid_platform_ids": invalid_platform_ids,
             "resolutions": [],
         }
         for proxy in selected:
@@ -164,6 +181,8 @@ class SearchCoordinator:
                 if not response.candidates:
                     continue
                 for candidate in response.candidates:
+                    if not valid_platform_id(platform, candidate.get("platform_id")):
+                        continue
                     verified = {
                         **candidate,
                         "anchor_evidence": {
@@ -172,6 +191,9 @@ class SearchCoordinator:
                             "anchor_id": anchor.get("anchor_id"),
                             "recorded_title": anchor.get("recorded_title"),
                             "recorded_artist": anchor.get("recorded_artist"),
+                            "proxy_accepted": True,
+                            "proxy_match_score": proxy.get("match_score"),
+                            "proxy_match_components": proxy.get("match_components"),
                         },
                     }
                     key = self._candidate_key(verified)
@@ -222,6 +244,20 @@ class SearchCoordinator:
                 }
             )
         exact_platform_id = self._target_platform_id(platform, target)
+        if exact_platform_id and not valid_platform_id(platform, exact_platform_id):
+            attempts.append(
+                {
+                    "backend": None,
+                    "query": f"id:{exact_platform_id}",
+                    "query_reason": "exact_platform_id",
+                    "status": "INVALID_PLATFORM_ID",
+                    "pages_scanned": 0,
+                    "exhaustive": False,
+                    "candidate_count": 0,
+                    "error": f"ID does not match the {platform} platform format",
+                }
+            )
+            exact_platform_id = ""
         if exact_platform_id:
             for adapter in adapters:
                 resolver = getattr(adapter, "resolve_platform_id", None)
@@ -251,16 +287,22 @@ class SearchCoordinator:
                     }
                 )
                 for candidate in response.candidates:
+                    if not valid_platform_id(platform, candidate.get("platform_id")):
+                        continue
                     unique_candidates.setdefault(self._candidate_key(candidate), candidate)
                 if response.candidates:
                     ranking_target = {**target, "platform_id": exact_platform_id}
                     ranked = rank_candidates(ranking_target, list(unique_candidates.values()))
+                    accepted, rejected = partition_ranked_candidates(ranking_target, ranked)
+                    if not accepted:
+                        continue
                     result = {
                         "platform": platform,
-                        "status": determine_search_status(ranked, attempts),
+                        "status": determine_search_status(accepted, attempts),
                         "queries": queries,
                         "attempts": attempts,
-                        "candidates": ranked,
+                        "candidates": accepted,
+                        "rejected_candidates": rejected,
                         "resolution": "official_platform_id",
                     }
                     self._append_trace({"event": "platform_search_complete", "result": result})
@@ -302,6 +344,8 @@ class SearchCoordinator:
                     }
                 )
                 for candidate in response.candidates:
+                    if not valid_platform_id(platform, candidate.get("platform_id")):
+                        continue
                     key = self._candidate_key(candidate)
                     unique_candidates.setdefault(key, candidate)
                 provisional = rank_candidates(target, list(unique_candidates.values()))
@@ -330,12 +374,14 @@ class SearchCoordinator:
         )
         if anchor_summary:
             ranked = rank_candidates(target, list(unique_candidates.values()))
+        accepted, rejected = partition_ranked_candidates(target, ranked)
         result = {
             "platform": platform,
-            "status": determine_search_status(ranked, attempts),
+            "status": determine_search_status(accepted, attempts),
             "queries": queries,
             "attempts": attempts,
-            "candidates": ranked,
+            "candidates": accepted,
+            "rejected_candidates": rejected,
         }
         if early_stop:
             result["query_expansion"] = {"status": "STOPPED_HIGH_CONFIDENCE", **early_stop}

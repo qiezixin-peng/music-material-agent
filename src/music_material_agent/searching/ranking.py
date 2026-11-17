@@ -3,7 +3,7 @@ from __future__ import annotations
 from difflib import SequenceMatcher
 from typing import Any, Iterable
 
-from .planner import normalize_text, split_artists, version_tokens
+from .planner import BRACKET_PATTERN, base_title, normalize_text, split_artists, version_tokens
 
 
 def _similarity(left: str | None, right: str | None) -> float:
@@ -59,12 +59,15 @@ def rank_candidates(target: dict[str, Any], candidates: list[dict[str, Any]]) ->
     target_artists = target.get("artists") or target.get("artist")
     target_platform_id = str(target.get("platform_id") or "")
     ranked: list[dict[str, Any]] = []
+    title_variants = [target_title, base_title(target_title)]
+    title_variants.extend(BRACKET_PATTERN.findall(target_title))
+    title_variants = [value for value in title_variants if str(value).strip()]
     for candidate in candidates:
         title = str(candidate.get("title_raw") or candidate.get("title") or "")
         platform_id = str(candidate.get("platform_id") or "")
         reasons: list[str] = []
         exact_id = bool(target_platform_id and platform_id and target_platform_id == platform_id)
-        title_score = _similarity(target_title, title)
+        title_score = max((_similarity(value, title) for value in title_variants), default=0.0)
         artist_score = _artist_score(target_artists, candidate.get("artists") or candidate.get("artist"))
         album_score = _similarity(target.get("album"), candidate.get("album_raw") or candidate.get("album"))
         duration_score = _duration_score(target.get("duration_s"), candidate.get("duration_s"))
@@ -83,7 +86,11 @@ def rank_candidates(target: dict[str, Any], candidates: list[dict[str, Any]]) ->
         elif "version_conflict" in reasons:
             score = max(0.0, score - 0.35)
         if title_score == 1.0:
-            reasons.append("exact_normalized_title")
+            reasons.append(
+                "exact_normalized_title"
+                if _similarity(target_title, title) == 1.0
+                else "title_alias_match"
+            )
         if artist_score >= 0.95:
             reasons.append("artist_match")
         if duration_score >= 0.8:
@@ -103,3 +110,48 @@ def rank_candidates(target: dict[str, Any], candidates: list[dict[str, Any]]) ->
             }
         )
     return sorted(ranked, key=lambda item: item["match_score"], reverse=True)
+
+
+def candidate_is_plausible(target: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    """Gate recall-oriented rankings before an item is represented as found."""
+    if not str(candidate.get("title_raw") or candidate.get("title") or "").strip():
+        return False
+    reasons = set(candidate.get("match_reasons") or [])
+    if "exact_platform_id" in reasons:
+        return True
+    anchor = candidate.get("anchor_evidence")
+    if isinstance(anchor, dict) and anchor.get("proxy_accepted") is True:
+        return True
+    components = candidate.get("match_components") or {}
+    title_score = float(components.get("title") or 0)
+    artist_score = float(components.get("artists") or 0)
+    duration_score = float(components.get("duration") or 0)
+    version_score = float(components.get("version") or 0)
+    overall = float(candidate.get("match_score") or 0)
+    target_artists = split_artists(target.get("artists") or target.get("artist"))
+    if not target_artists:
+        return title_score >= 0.98 and version_score >= 0.99
+    normal_match = (
+        overall >= 0.65
+        and title_score >= 0.85
+        and artist_score >= 0.40
+        and version_score >= 0.99
+    )
+    alias_with_duration = (
+        overall >= 0.75
+        and title_score >= 0.60
+        and artist_score >= 0.95
+        and duration_score >= 0.80
+        and version_score >= 0.99
+    )
+    return normal_match or alias_with_duration
+
+
+def partition_ranked_candidates(
+    target: dict[str, Any], ranked: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for candidate in ranked:
+        (accepted if candidate_is_plausible(target, candidate) else rejected).append(candidate)
+    return accepted, rejected

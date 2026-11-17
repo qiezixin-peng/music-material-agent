@@ -118,6 +118,10 @@ def run_review_batch(
             "fresh_status": fresh.get("status"),
             "fresh_attempts": fresh.get("attempts") or [],
             "fresh_candidates": [_candidate_summary(item) for item in candidates[:10]],
+            "rejected_fresh_candidates": [
+                _candidate_summary(item)
+                for item in (fresh.get("rejected_candidates") or [])[:10]
+            ],
             "fresh_trace_path": fresh.get("trace_path"),
             "query_expansion": fresh.get("query_expansion"),
             "same_platform_id": bool(

@@ -137,4 +137,15 @@ def test_collection_records_unmapped_row_as_partial(
         coordinator_factory=lambda *_args, **_kwargs: FakeCoordinator(),
     )
     assert result["statuses"] == {"SEARCH_PARTIAL": 1}
-    assert result["sealed"] is True
+    assert result["sealed"] is False
+    assert result["needs_technical_retry"] is True
+
+    sealed = run_platform_collection(
+        service,
+        job["job_id"],
+        "kuwo",
+        "kuwo-agent",
+        seal_with_technical=True,
+        coordinator_factory=lambda *_args, **_kwargs: FakeCoordinator(),
+    )
+    assert sealed["sealed"] is True

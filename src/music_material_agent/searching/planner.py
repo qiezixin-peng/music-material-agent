@@ -11,6 +11,7 @@ ARTIST_SPLIT_PATTERN = re.compile(r"\s*(?:&|＆|,|，|;|；|、|/|\\)\s*")
 VERSION_PATTERN = re.compile(
     r"(?:"
     r"DJ(?:版|弹鼓版|抖音版|沈念版|R7版)?|"
+    r"R\s*&?\s*B版|架子鼓版|和声伴奏|弹鼓版|鼓版|"
     r"加速版|降速版|加快版|慢速版|氛围版|伴奏版?|纯音乐|纯享FM|"
     r"Live|Remix|Mix|Sped\s*Up|Slowed(?:\s*&\s*Reverb)?|Speed\s*Up|"
     r"Fast|Slow|Instrumental|Acoustic|Demo|Radio\s*Edit|"

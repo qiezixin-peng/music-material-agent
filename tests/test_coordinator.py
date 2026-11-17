@@ -20,7 +20,7 @@ class FakeAdapter:
         if "真爱假说" in request.query:
             candidates.append(
                 {
-                    "platform_id": "n1",
+                    "platform_id": "123456",
                     "title_raw": "你就这样出现闯进我心里（真爱假说）",
                     "artists": ["庄东茹（豆芽鱼）", "LvJam橙"],
                     "duration_s": 181,
@@ -137,9 +137,35 @@ class CountingExactAdapter:
             status="OK",
             candidates=[
                 {
-                    "platform_id": "exact-1",
+                    "platform_id": "987654",
                     "title_raw": "我们一起灿烂过的那些年",
                     "artists": ["七哼Qhyung", "李璟崎KevinGee"],
+                }
+            ],
+            pages_scanned=1,
+            exhaustive=False,
+        )
+
+
+@dataclass
+class WrongSameTitleAdapter:
+    platform: str = "netease"
+    name: str = "wrong-same-title"
+
+    def health(self):
+        return {"ok": True}
+
+    def search(self, request: SearchRequest) -> SearchResponse:
+        return SearchResponse(
+            backend=self.name,
+            platform=self.platform,
+            query=request.query,
+            status="OK",
+            candidates=[
+                {
+                    "platform_id": "2097819142",
+                    "title_raw": "讨厌水逆",
+                    "artists": ["怪豆儿"],
                 }
             ],
             pages_scanned=1,
@@ -184,6 +210,19 @@ def test_coordinator_stops_variants_after_unambiguous_native_match() -> None:
     assert adapter.calls == 1
     assert len(result["attempts"]) == 1
     assert result["query_expansion"]["status"] == "STOPPED_HIGH_CONFIDENCE"
+
+
+def test_coordinator_rejects_same_title_with_wrong_artist() -> None:
+    coordinator = SearchCoordinator()
+    coordinator.register(WrongSameTitleAdapter())
+
+    result = coordinator.search_platform(
+        "netease", {"title": "讨厌水逆", "artists": ["李雪萌"]}, max_queries=2
+    )
+
+    assert result["status"] == "SEARCH_PARTIAL"
+    assert result["candidates"] == []
+    assert result["rejected_candidates"][0]["artists"] == ["怪豆儿"]
 
 
 def test_coordinator_without_adapter_reports_unavailable() -> None:

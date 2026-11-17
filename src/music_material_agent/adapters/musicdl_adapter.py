@@ -267,7 +267,7 @@ def _detail_metadata_candidate(
     candidate: dict[str, Any] = {
         "platform": platform,
         "backend": "musicdl",
-        "platform_id": resolved_id or identifier,
+        "platform_id": resolved_id,
         "title_raw": title,
         "artists_raw": artists_raw,
         "artists": split_artists(artists_raw),

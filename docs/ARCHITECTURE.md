@@ -26,6 +26,8 @@ SQLite 使用 WAL 模式，保存任务状态、租约、观测、不可变快�
 
 元数据补充不保存 `musicdl.raw_data`。适配器只读取经过审计的平台字段路径，将日期归一化为 `YYYY-MM-DD`，并在 `metadata_evidence` 中记录具体来源路径。当前已实测网易云 `publishTime`、QQ `time_public` 与歌手 MID、酷狗 `PublishDate` 与歌手头像模板、酷我 `web_artistpic_short`。QQ 搜索采用 `musicdl` 构造并签名的官方加密端点；若下载解析失败，搜索元数据仍以 `metadata_only` 候选保留。内联歌词通过独立 MCP 工具写入 UTF-8 文件，留痕仅含完整性元数据。
 
+候选排序只负责召回顺序，不等于验收。进入 observation 前还必须通过平台 ID 形状、标题相似度、歌手相似度和版本兼容性门槛；未通过的候选保留在 `rejected_candidate_summaries`，不会占用结果字段。Gandalf 的 ID 先做平台格式校验，再做官方详情回查；其会话在单个采集进程内复用，避免逐查询登录和过度调用。
+
 状态机把“事实不存在”和“技术上没拿到”分开。`AUTH_REQUIRED`、`RATE_LIMITED`、`SEARCH_UNAVAILABLE`、`SEARCH_PARTIAL`、`FOUND_CANDIDATES` 均不能降级为 `NOT_FOUND_EXHAUSTIVE`。
 
 音频自动化遵守无 UI 约束：汽水通过 headless helper 下载；网易云、QQ、酷狗、酷我通过 `musicdl` 的 Python 后端在单一进程内重新取得精确 ID 的短期音频引用，直接写入 staging。项目不调用 `musicdl` 旧 Web 服务，也不保存其包含短期 URL 的下载结果 pickle；文件必须通过签名、FFprobe、时长和 SHA-256 验证后才进入正式目录。

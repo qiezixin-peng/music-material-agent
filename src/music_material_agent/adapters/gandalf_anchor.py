@@ -20,9 +20,26 @@ class GandalfAnchorClient:
         self.base_url = base_url.rstrip("/")
         self.credentials_provider = credentials_provider
         self.client_factory = client_factory
+        self._session: httpx.Client | None = None
+        self._authenticated = False
 
     def _client(self) -> httpx.Client:
-        return self.client_factory(base_url=self.base_url, follow_redirects=True, timeout=20)
+        if self._session is None or self._session.is_closed:
+            self._session = self.client_factory(
+                base_url=self.base_url, follow_redirects=True, timeout=20
+            )
+        return self._session
+
+    def close(self) -> None:
+        if self._session is not None and not self._session.is_closed:
+            self._session.close()
+
+    def _ensure_login(self, credentials: Credentials) -> httpx.Client:
+        client = self._client()
+        if not self._authenticated:
+            self._login(client, credentials)
+            self._authenticated = True
+        return client
 
     @staticmethod
     def _login(client: httpx.Client, credentials: Credentials) -> None:
@@ -44,10 +61,9 @@ class GandalfAnchorClient:
         if not credentials:
             return {"ok": False, "status": "UNCONFIGURED", "role": "anchor_only"}
         try:
-            with self._client() as client:
-                self._login(client, credentials)
-                response = client.get("/api/auth/me")
-                response.raise_for_status()
+            client = self._ensure_login(credentials)
+            response = client.get("/api/auth/me")
+            response.raise_for_status()
             return {"ok": True, "status": "OK", "role": "anchor_only"}
         except PermissionError:
             return {"ok": False, "status": "AUTH_REQUIRED", "role": "anchor_only"}
@@ -62,11 +78,14 @@ class GandalfAnchorClient:
         if platform:
             params["platform"] = platform
         try:
-            with self._client() as client:
-                self._login(client, credentials)
+            client = self._ensure_login(credentials)
+            response = client.get("/api/songs", params=params)
+            if response.status_code in {401, 403}:
+                self._authenticated = False
+                client = self._ensure_login(credentials)
                 response = client.get("/api/songs", params=params)
-                response.raise_for_status()
-                payload = response.json()
+            response.raise_for_status()
+            payload = response.json()
         except PermissionError:
             return {"status": "AUTH_REQUIRED", "role": "anchor_only", "authoritative": False, "candidates": []}
         except Exception as error:

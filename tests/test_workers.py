@@ -54,3 +54,34 @@ def test_material_worker_repeats_until_manifest_is_complete(monkeypatch) -> None
     assert len(calls) == 2
     assert result["progress"]["complete"] is True
     assert result["batches"] == 2
+
+
+def test_collection_worker_retries_technical_rows_before_sealing(monkeypatch) -> None:
+    calls = []
+
+    def fake_batch(*args, **kwargs):
+        calls.append(kwargs)
+        recovered = len(calls) == 3
+        return {
+            "job_id": "job-1",
+            "platform": "qq",
+            "partition_status": "SEALED" if recovered else "COLLECTING",
+            "total": 1,
+            "observed": 1,
+            "remaining": 0,
+            "statuses": {"FOUND_CANDIDATES" if recovered else "SEARCH_PARTIAL": 1},
+            "processed": [{"row_id": "1"}],
+            "sealed": recovered,
+            "seal_result": None,
+            "technical_remaining": 0 if recovered else 1,
+            "needs_technical_retry": not recovered,
+        }
+
+    monkeypatch.setattr(workers, "run_platform_collection", fake_batch)
+    monkeypatch.setattr(workers.time, "sleep", lambda _seconds: None)
+    result = workers.run_collection_worker(
+        object(), "job-1", "qq", "qq-agent", max_technical_retries=2
+    )
+
+    assert result["sealed"] is True
+    assert [call["retry_technical"] for call in calls] == [False, True, True]

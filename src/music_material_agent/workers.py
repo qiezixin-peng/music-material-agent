@@ -21,6 +21,8 @@ def run_collection_worker(
     page_limit: int = 5,
     max_queries: int = 8,
     event_sink: Callable[[dict[str, Any]], None] | None = None,
+    max_technical_retries: int = 2,
+    retry_backoff_seconds: float = 10.0,
 ) -> dict[str, Any]:
     """Run bounded durable batches until one platform snapshot is sealed.
 
@@ -33,7 +35,10 @@ def run_collection_worker(
         raise ValueError(f"Unsupported platform: {platform}")
     batch_size = max(1, min(int(batch_size), 100))
     batches = 0
+    technical_retry_passes = 0
     while True:
+        retry_technical = 0 < technical_retry_passes <= max_technical_retries
+        seal_with_technical = technical_retry_passes > max_technical_retries
         result = run_platform_collection(
             service,
             job_id,
@@ -43,6 +48,8 @@ def run_collection_worker(
             page_limit=page_limit,
             max_queries=max_queries,
             seal_when_complete=True,
+            retry_technical=retry_technical,
+            seal_with_technical=seal_with_technical,
         )
         batches += 1
         event = {
@@ -54,11 +61,18 @@ def run_collection_worker(
             "remaining": result["remaining"],
             "statuses": result["statuses"],
             "sealed": result["sealed"],
+            "technical_remaining": result.get("technical_remaining", 0),
+            "technical_retry_pass": technical_retry_passes,
         }
         if event_sink:
             event_sink(event)
         if result["sealed"] or result["partition_status"] == "SEALED":
             return {**result, "batches": batches}
+        if result.get("needs_technical_retry"):
+            technical_retry_passes += 1
+            if technical_retry_passes <= max_technical_retries:
+                time.sleep(max(0.0, float(retry_backoff_seconds)))
+            continue
         if not result.get("processed"):
             raise RuntimeError(
                 f"Collection worker stalled with {result['remaining']} rows remaining"

@@ -158,6 +158,7 @@ def run_platform_collection(
     lease_minutes: int = 120,
     seal_when_complete: bool = True,
     retry_technical: bool = False,
+    seal_with_technical: bool = False,
     coordinator_factory: Callable[..., Any] = build_default_coordinator,
 ) -> dict[str, Any]:
     """Collect one resumable platform batch and durably record every row outcome."""
@@ -225,6 +226,10 @@ def run_platform_collection(
             "attempts": result.get("attempts") or [],
             "candidate_count": len(candidates),
             "candidate_summaries": [_candidate_summary(item) for item in candidates[:10]],
+            "rejected_candidate_summaries": [
+                _candidate_summary(item)
+                for item in (result.get("rejected_candidates") or [])[:10]
+            ],
             "trace_path": result.get("trace_path"),
             "resolution": result.get("resolution"),
             "query_expansion": result.get("query_expansion"),
@@ -251,7 +256,15 @@ def run_platform_collection(
     progress = service.partition_progress(job_id, platform)
     sealed = False
     seal_result = None
-    if seal_when_complete and progress["remaining"] == 0:
+    technical_remaining = sum(
+        int(progress["statuses"].get(status, 0))
+        for status in ("SEARCH_UNAVAILABLE", "AUTH_REQUIRED", "RATE_LIMITED", "SEARCH_PARTIAL")
+    )
+    if (
+        seal_when_complete
+        and progress["remaining"] == 0
+        and (technical_remaining == 0 or seal_with_technical)
+    ):
         seal_result = service.seal_partition(job_id, platform, agent_id)
         sealed = True
     return {
@@ -260,4 +273,6 @@ def run_platform_collection(
         "sealed": sealed,
         "seal_result": seal_result,
         "retry_technical": retry_technical,
+        "technical_remaining": technical_remaining,
+        "needs_technical_retry": bool(progress["remaining"] == 0 and technical_remaining),
     }

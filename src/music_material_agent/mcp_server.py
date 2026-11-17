@@ -248,6 +248,7 @@ def collect_platform_batch(
     max_queries: int = 8,
     seal_when_complete: bool = True,
     retry_technical: bool = False,
+    seal_with_technical: bool = False,
 ) -> dict[str, Any]:
     """Run a resumable native-search batch, record every row outcome, and optionally seal full coverage."""
     from .collection import run_platform_collection
@@ -262,6 +263,7 @@ def collect_platform_batch(
         max_queries=max_queries,
         seal_when_complete=seal_when_complete,
         retry_technical=retry_technical,
+        seal_with_technical=seal_with_technical,
     )
 
 
