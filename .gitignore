@@ -9,5 +9,6 @@ build/
 dist/
 *.egg-info/
 data/
+bin/*.exe
 outputs/
 *.log

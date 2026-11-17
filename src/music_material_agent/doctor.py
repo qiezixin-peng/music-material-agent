@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
 import shutil
 import sqlite3
 import sys
@@ -10,7 +12,7 @@ from typing import Any
 from .paths import ProjectPaths
 from .media import find_media_binary
 from .credentials import get_gandalf_credentials
-from .adapters.go_music_dl_adapter import read_soda_client_cookie
+from .adapters.go_music_dl_adapter import DEFAULT_SODA_HELPER, read_soda_client_cookie
 
 
 def run_doctor(paths: ProjectPaths | None = None) -> dict[str, Any]:
@@ -25,8 +27,26 @@ def run_doctor(paths: ProjectPaths | None = None) -> dict[str, Any]:
         "musicdl": importlib.util.find_spec("musicdl") is not None,
     }
     binaries = {name: (find_media_binary(name) if name in {"ffmpeg", "ffprobe"} else shutil.which(name)) for name in ("ffmpeg", "ffprobe", "git", "uv")}
+    helper_manifest_path = DEFAULT_SODA_HELPER.with_suffix(".build.json")
+    helper_manifest: dict[str, Any] = {}
+    if helper_manifest_path.is_file():
+        try:
+            helper_manifest = json.loads(helper_manifest_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            helper_manifest = {}
+    helper_digest = ""
+    if DEFAULT_SODA_HELPER.is_file():
+        helper_digest = hashlib.sha256(DEFAULT_SODA_HELPER.read_bytes()).hexdigest()
+    helper_verified = bool(
+        helper_digest
+        and helper_manifest.get("sha256")
+        and helper_digest == helper_manifest.get("sha256")
+    )
     local_backends = {
         "go_music_dl": Path(r"D:\三喜\工具\go-music-dl\music-dl.exe").is_file(),
+        "soda_agent_helper": DEFAULT_SODA_HELPER.is_file(),
+        "soda_agent_helper_verified": helper_verified,
+        "soda_agent_helper_sha256": helper_digest or None,
         "soda_client": Path(r"D:\Soda Music\3.8.0").is_dir(),
         "soda_desktop_cookie_count": read_soda_client_cookie()[1],
         "gandalf_credentials": get_gandalf_credentials() is not None,
@@ -62,6 +82,8 @@ def run_doctor(paths: ProjectPaths | None = None) -> dict[str, Any]:
                 (not binaries["ffprobe"], "FFprobe is not available; audio inspection is disabled."),
                 (not optional["scrapling"], "Scrapling adapter is not installed yet."),
                 (not optional["musicdl"], "musicdl adapter is not installed yet."),
+                (not DEFAULT_SODA_HELPER.is_file(), "Soda agent helper is not built; run scripts/build_soda_helper.ps1."),
+                (DEFAULT_SODA_HELPER.is_file() and not helper_verified, "Soda agent helper build manifest is missing or its SHA-256 does not match."),
             )
             if condition
         ],

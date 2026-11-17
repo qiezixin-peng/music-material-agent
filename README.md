@@ -18,17 +18,18 @@
 - Scrapling 网页证据层：保存 HTML、哈希、OG/JSON-LD 元数据和自适应选择器数据库。
 - 即时搜索逐次写入独立临时目录的 `search-events.jsonl`。
 - Gandalf 可选锚点已接入 Windows 凭据管理器，所有候选固定标注 `anchor_only` 和非权威。
-- 本机 `go-music-dl` 汽水后端可按需隐藏启动，直接读取已登录汽水桌面客户端的 Chromium Cookie，并在每次后端启动时自动同步登录态。
+- 汽水使用无界面的 `soda-agent-helper`：直接读取已登录桌面客户端 Cookie，并在进程内调用客户端 `bdms.node` 完成签名；不启动浏览器、Web UI 或常驻服务。
 - 音频先进入临时 staging，经文件签名、SHA-256、FFprobe 音频流和时长验真后才进入正式输出。
 - 封面、头像和歌词下载带类型、大小和 HTML 错误页检查。
 - 最终 XLSX 同时导出源行、五平台原始字段、证据和逐行复核结论。
 
-汽水桌面 Cookie 同步已实机验证；当前 `go-music-dl` 的汽水关键词搜索仍可能返回非穷尽空结果，这会被记录为技术性空结果，绝不会被报告为平台不存在。后续里程碑将继续完善该搜索接口、五平台头像来源策略和后台批量工作队列。
+`musicdl 2.14.2` 始终是五平台主干后端；无界面汽水 helper 是针对客户端登录态、PC 签名搜索和音频下载的补强层，Scrapling 负责网页证据。三者的候选统一进入同一评分、留痕和复核流程。任何非穷尽空结果都不会被报告为平台不存在。
 
 ## 开发运行
 
 ```powershell
 uv sync --extra dev --extra musicdl --extra adapters
+./scripts/build_soda_helper.ps1
 uv run music-material doctor
 uv run pytest
 uv run music-material-mcp
@@ -41,7 +42,7 @@ uv run music-material mcp-http --host 127.0.0.1 --port 8766
 - 任务临时痕迹：`D:\三喜\临时文件\音乐物料任务-<job_id>`
 - 正式结果：`D:\三喜\歌曲物料下载\Agent任务\<job_id>`
 
-账号、密码和 Cookie 不写入任务表、日志、MCP 参数或 Git。`go-music-dl` 本地管理凭据放在 Windows 凭据管理器；汽水 Cookie 只从桌面客户端数据库读取并同步到被 Git 忽略的本机运行数据目录。正常工作流不需要扫码登录。
+账号、密码和 Cookie 不写入任务表、日志、MCP 参数或 Git。汽水 Cookie 仅通过 helper 的标准输入在内存中传递；签名身份写入被 Git 忽略的本机运行数据目录。正常工作流不需要扫码登录。
 
 `mcp-http` 提供 `http://127.0.0.1:8766/mcp`，可由多个 Agent 窗口共享；stdio 模式保留给只支持本地进程型 MCP 的客户端。
 

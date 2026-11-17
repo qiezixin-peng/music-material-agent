@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import sqlite3
+import subprocess
 
 import httpx
 
@@ -48,3 +50,40 @@ def test_reads_plaintext_soda_desktop_cookie_without_trace(tmp_path: Path, monke
     assert count == 2
     assert cookie == "sessionid=secret-one; uid_tt=secret-two"
     assert [path for path in tmp_path.rglob("*") if path.is_file()] == [database]
+
+
+def test_soda_helper_search_maps_candidates_without_cookie_trace(tmp_path: Path, monkeypatch) -> None:
+    helper = tmp_path / "soda-agent-helper.exe"
+    helper.write_bytes(b"test")
+    monkeypatch.setattr(go_music_dl_adapter, "DEFAULT_SODA_HELPER", helper)
+    monkeypatch.setattr(
+        go_music_dl_adapter, "read_soda_client_cookie", lambda: ("sessionid=secret", 1)
+    )
+    payload = {
+        "status": "OK",
+        "candidates": [
+            {
+                "id": "soda-1",
+                "name": "平台原名",
+                "artist": "歌手甲 / 歌手乙",
+                "album": "平台专辑",
+                "duration": 180,
+                "extra": {"track_id": "soda-1"},
+            }
+        ],
+    }
+
+    def fake_run(*args, **kwargs):
+        assert b"sessionid=secret" in kwargs["input"]
+        return subprocess.CompletedProcess(args[0], 0, json.dumps(payload, ensure_ascii=False).encode(), b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    adapter = GoMusicDlAdapter(tmp_path / "trace")
+    response = adapter.search(SearchRequest(platform="soda", query="平台原名"))
+
+    assert response.status == "OK"
+    assert response.backend == "soda-agent-helper"
+    assert response.candidates[0]["platform_id"] == "soda-1"
+    trace = Path(response.raw_trace_path).read_text(encoding="utf-8")
+    assert "sessionid" not in trace
+    assert "secret" not in trace

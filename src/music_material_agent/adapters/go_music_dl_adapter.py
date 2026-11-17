@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import html
+import json
 import os
 import socket
 import subprocess
@@ -22,6 +23,7 @@ from ..searching.planner import split_artists
 
 DEFAULT_EXE = Path(r"D:\三喜\工具\go-music-dl\music-dl.exe")
 DEFAULT_SODA_CLIENT = Path(r"D:\Soda Music\3.8.0")
+DEFAULT_SODA_HELPER = ProjectPaths.defaults().project_root / "bin" / "soda-agent-helper.exe"
 SODA_PROFILE = Path(os.environ.get("APPDATA", "")) / "SodaMusic"
 GO_MUSIC_DL_ADMIN_SERVICE = "music-material-agent:go-music-dl-admin"
 
@@ -142,10 +144,12 @@ class GoMusicDlAdapter:
 
     def health(self) -> dict[str, Any]:
         return {
-            "ok": bool(self._base_url or DEFAULT_EXE.is_file()),
-            "backend": self.name,
+            "ok": bool(self._base_url or DEFAULT_SODA_HELPER.is_file()),
+            "backend": "soda-agent-helper" if not self._base_url else self.name,
             "platform": self.platform,
             "executable": str(DEFAULT_EXE),
+            "soda_helper": str(DEFAULT_SODA_HELPER),
+            "soda_helper_available": DEFAULT_SODA_HELPER.is_file(),
             "soda_client_dir": str(DEFAULT_SODA_CLIENT),
             "local_signer_candidate": DEFAULT_SODA_CLIENT.is_dir(),
             "desktop_cookie_count": read_soda_client_cookie()[1],
@@ -153,8 +157,10 @@ class GoMusicDlAdapter:
         }
 
     def search(self, request: SearchRequest) -> SearchResponse:
+        if not self._base_url:
+            return self._search_with_helper(request)
         try:
-            base_url = self._base_url or self._service.start()  # type: ignore[union-attr]
+            base_url = self._base_url
             response = httpx.get(
                 urljoin(base_url, "search"),
                 params={"q": request.query, "sources": "soda", "type": "song", "page": 1, "page_size": 30},
@@ -210,12 +216,113 @@ class GoMusicDlAdapter:
                 error=f"{type(error).__name__}: {error}"[:500],
             )
 
+    def _run_soda_helper(self, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
+        if not DEFAULT_SODA_HELPER.is_file():
+            raise FileNotFoundError(
+                f"{DEFAULT_SODA_HELPER}; run scripts/build_soda_helper.ps1"
+            )
+        cookie, count = read_soda_client_cookie()
+        if not cookie:
+            raise RuntimeError("Soda desktop authentication is unavailable")
+        request_payload = {**payload, "cookie": cookie}
+        environment = os.environ.copy()
+        environment["QISHUI_CLIENT_DIR"] = str(DEFAULT_SODA_CLIENT)
+        identity = ProjectPaths.defaults().data_root / "soda-helper-identity.json"
+        identity.parent.mkdir(parents=True, exist_ok=True)
+        environment["QISHUI_IDENTITY_FILE"] = str(identity)
+        completed = subprocess.run(
+            [str(DEFAULT_SODA_HELPER)],
+            input=json.dumps(request_payload, ensure_ascii=False).encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            timeout=timeout,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if not completed.stdout:
+            raise RuntimeError(f"Soda helper returned no JSON (exit={completed.returncode})")
+        result = json.loads(completed.stdout.decode("utf-8"))
+        result["desktop_cookie_count"] = count
+        return result
+
+    def _search_with_helper(self, request: SearchRequest) -> SearchResponse:
+        try:
+            result = self._run_soda_helper(
+                {"operation": "search", "query": request.query}, timeout=60
+            )
+            trace_result = {
+                key: value for key, value in result.items() if key != "desktop_cookie_count"
+            }
+            encoded = json.dumps(trace_result, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            digest = __import__("hashlib").sha256(encoded).hexdigest()
+            snapshot = self.work_dir / f"soda-helper-search-{digest[:16]}.json"
+            if not snapshot.exists():
+                snapshot.write_bytes(encoded)
+            if result.get("status") != "OK":
+                return SearchResponse(
+                    backend="soda-agent-helper",
+                    platform="soda",
+                    query=request.query,
+                    status=str(result.get("status") or "SEARCH_UNAVAILABLE"),
+                    candidates=[],
+                    exhaustive=False,
+                    error=str(result.get("error") or "Soda helper search failed")[:500],
+                    raw_trace_path=str(snapshot),
+                )
+            candidates = []
+            for item in result.get("candidates") or []:
+                artists_raw = item.get("artist")
+                candidates.append(
+                    {
+                        "platform": "soda",
+                        "backend": "soda-agent-helper",
+                        "platform_id": str(item.get("id") or ""),
+                        "title_raw": item.get("name"),
+                        "artists_raw": artists_raw,
+                        "artists": split_artists(artists_raw),
+                        "album_raw": item.get("album"),
+                        "album_id": item.get("album_id"),
+                        "duration_s": float(item.get("duration") or 0) or None,
+                        "cover_url": item.get("cover"),
+                        "is_vip": bool(item.get("is_vip")),
+                        "backend_ref": {
+                            "source": "soda",
+                            "id": str(item.get("id") or ""),
+                            "extra": item.get("extra") or {},
+                        },
+                    }
+                )
+            return SearchResponse(
+                backend="soda-agent-helper",
+                platform="soda",
+                query=request.query,
+                status="OK",
+                candidates=candidates,
+                pages_scanned=1,
+                exhaustive=False,
+                raw_trace_path=str(snapshot),
+                warnings=[] if candidates else ["Soda helper returned an empty non-exhaustive result"],
+            )
+        except Exception as error:
+            return SearchResponse(
+                backend="soda-agent-helper",
+                platform="soda",
+                query=request.query,
+                status="SEARCH_UNAVAILABLE",
+                candidates=[],
+                exhaustive=False,
+                error=f"{type(error).__name__}: {error}"[:500],
+            )
+
     def download(self, candidate: dict[str, Any], staging_dir: str | Path, output_dir: str | Path) -> dict[str, Any]:
         reference = candidate.get("backend_ref") or {}
         source = str(reference.get("source") or candidate.get("platform") or "")
         identifier = str(reference.get("id") or candidate.get("platform_id") or "")
         if source not in {"soda", "netease", "qq", "kugou", "kuwo"} or not identifier:
             raise ValueError("A supported source and opaque platform id are required")
+        if source == "soda" and not self._base_url:
+            return self._download_soda_with_helper(candidate, staging_dir, output_dir)
         base_url = self._base_url or self._service.start()  # type: ignore[union-attr]
         params = {
             "id": identifier,
@@ -256,3 +363,67 @@ class GoMusicDlAdapter:
         partial.replace(target)
         validation["path"] = str(target)
         return {"status": "DOWNLOADED_VERIFIED", "path": str(target), "validation": validation}
+
+    def _download_soda_with_helper(
+        self, candidate: dict[str, Any], staging_dir: str | Path, output_dir: str | Path
+    ) -> dict[str, Any]:
+        reference = candidate.get("backend_ref") or {}
+        identifier = str(reference.get("id") or candidate.get("platform_id") or "")
+        staging = Path(staging_dir).resolve()
+        output = Path(output_dir).resolve()
+        staging.mkdir(parents=True, exist_ok=True)
+        output.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(
+            r'[<>:"/\\|?*\x00-\x1f]+',
+            "_",
+            f"{candidate.get('title_raw') or 'unknown'} - {candidate.get('artists_raw') or 'unknown'}",
+        ).strip(" ._")[:160] or identifier
+        partial = staging / f"{safe}.part"
+        result = self._run_soda_helper(
+            {
+                "operation": "download",
+                "song": {
+                    "id": identifier,
+                    "name": candidate.get("title_raw"),
+                    "artist": candidate.get("artists_raw"),
+                    "album": candidate.get("album_raw"),
+                    "album_id": candidate.get("album_id"),
+                    "duration": int(candidate.get("duration_s") or 0),
+                    "cover": candidate.get("cover_url"),
+                    "extra": reference.get("extra") or {},
+                },
+                "output_path": str(partial),
+            },
+            timeout=240,
+        )
+        if result.get("status") != "DOWNLOADED":
+            return {
+                "status": str(result.get("status") or "DOWNLOAD_FAILED"),
+                "error": str(result.get("error") or "Soda helper download failed")[:500],
+            }
+        validation = inspect_media_file(
+            partial, expected_duration_s=candidate.get("duration_s")
+        )
+        if not validation["valid"]:
+            invalid = partial.with_suffix(".invalid")
+            partial.replace(invalid)
+            return {
+                "status": "VALIDATION_FAILED",
+                "staging_path": str(invalid),
+                "validation": validation,
+            }
+        extension = {
+            "flac": ".flac",
+            "ogg": ".ogg",
+            "wav": ".wav",
+            "mp4_family": ".m4a",
+            "mpeg_or_aac": ".mp3",
+        }.get(validation.get("signature"), ".audio")
+        target = output / f"{safe}{extension}"
+        partial.replace(target)
+        validation["path"] = str(target)
+        return {
+            "status": "DOWNLOADED_VERIFIED",
+            "path": str(target),
+            "validation": validation,
+        }
