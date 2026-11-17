@@ -68,6 +68,9 @@ def test_soda_helper_search_maps_candidates_without_cookie_trace(tmp_path: Path,
                 "artist": "歌手甲 / 歌手乙",
                 "album": "平台专辑",
                 "duration": 180,
+                "release_date": 1763308800,
+                "release_company_raw": "深圳市丁香文化传媒有限公司",
+                "release_company_kind": "copyright_notice",
                 "extra": {
                     "track_id": "soda-1",
                     "unsafe_url": "https://temporary.invalid/from-extra",
@@ -93,6 +96,16 @@ def test_soda_helper_search_maps_candidates_without_cookie_trace(tmp_path: Path,
     assert "secret" not in trace
     assert "temporary.invalid" not in trace
     assert response.candidates[0]["backend_ref"]["extra"] == {"track_id": "soda-1"}
+    assert response.candidates[0]["release_date"] == "2025-11-17"
+    assert response.candidates[0]["release_company_raw"] == "深圳市丁香文化传媒有限公司"
+    assert response.candidates[0]["release_company_kind"] == "copyright_notice"
+    assert response.candidates[0]["metadata_evidence"] == [
+        {"field": "release_date", "source": "soda.album_detail.release_date"},
+        {
+            "field": "release_company_raw",
+            "source": "soda.album_detail.copyright_or_company",
+        },
+    ]
 
 
 def test_soda_helper_resolves_platform_id_through_official_metadata(tmp_path: Path, monkeypatch) -> None:
@@ -105,7 +118,14 @@ def test_soda_helper_resolves_platform_id_through_official_metadata(tmp_path: Pa
     payload = {
         "status": "OK",
         "candidates": [
-            {"id": "6705003948140398594", "name": "海阔天空", "artist": "Beyond"}
+            {
+                "id": "6705003948140398594",
+                "name": "海阔天空",
+                "artist": "Beyond",
+                "release_date": "1993-05-14",
+                "release_company_raw": "华纳唱片",
+                "release_company_kind": "platform_company",
+            }
         ],
     }
 
@@ -123,3 +143,5 @@ def test_soda_helper_resolves_platform_id_through_official_metadata(tmp_path: Pa
     assert response.status == "OK"
     assert response.candidates[0]["title_raw"] == "海阔天空"
     assert response.candidates[0]["artists_raw"] == "Beyond"
+    assert response.candidates[0]["release_date"] == "1993-05-14"
+    assert response.candidates[0]["release_company_raw"] == "华纳唱片"

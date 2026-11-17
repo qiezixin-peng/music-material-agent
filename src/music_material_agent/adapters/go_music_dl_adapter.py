@@ -16,6 +16,7 @@ from urllib.parse import urljoin
 import httpx
 
 from .base import SearchRequest, SearchResponse
+from .musicdl_enrichment import normalize_release_date
 from ..media import inspect_media_file
 from ..paths import ProjectPaths
 from ..searching.planner import split_artists
@@ -345,7 +346,7 @@ class GoMusicDlAdapter:
     @staticmethod
     def _candidate_from_helper(item: dict[str, Any]) -> dict[str, Any]:
         artists_raw = item.get("artist")
-        return {
+        candidate = {
             "platform": "soda",
             "backend": "soda-agent-helper",
             "platform_id": str(item.get("id") or ""),
@@ -363,6 +364,49 @@ class GoMusicDlAdapter:
                 "extra": _safe_soda_extra(item.get("extra")),
             },
         }
+        evidence: list[dict[str, str]] = []
+        if release_date := normalize_release_date(item.get("release_date")):
+            candidate["release_date"] = release_date
+            evidence.append(
+                {"field": "release_date", "source": "soda.album_detail.release_date"}
+            )
+        company = str(item.get("release_company_raw") or "").strip()
+        if company:
+            candidate["release_company_raw"] = company
+            candidate["release_company_kind"] = str(
+                item.get("release_company_kind") or "platform_company"
+            )
+            evidence.append(
+                {
+                    "field": "release_company_raw",
+                    "source": "soda.album_detail.copyright_or_company",
+                }
+            )
+        if evidence:
+            candidate["metadata_evidence"] = evidence
+        return candidate
+
+    def enrich_candidate(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        """Re-resolve one accepted Soda track so album-footer metadata is retained."""
+        identifier = str(candidate.get("platform_id") or "").strip()
+        if not identifier:
+            return candidate
+        response = self.resolve_platform_id(identifier)
+        if not response.candidates:
+            return candidate
+        resolved = response.candidates[0]
+        if str(resolved.get("platform_id") or "") != identifier:
+            return candidate
+        merged = {**candidate}
+        for field in (
+            "release_date",
+            "release_company_raw",
+            "release_company_kind",
+            "metadata_evidence",
+        ):
+            if resolved.get(field) not in (None, "", []):
+                merged[field] = resolved[field]
+        return merged
 
     def resolve_platform_id(self, platform_id: str) -> SearchResponse:
         identifier = str(platform_id).strip()

@@ -217,6 +217,24 @@ class SearchCoordinator:
         )
         return summary
 
+    @staticmethod
+    def _enrich_top_candidate(
+        adapters: list[PlatformAdapter], candidates: list[dict[str, Any]]
+    ) -> None:
+        """Fetch detail-only metadata after ranking, avoiding album calls for every hit."""
+        if not candidates:
+            return
+        for adapter in adapters:
+            enricher = getattr(adapter, "enrich_candidate", None)
+            if not callable(enricher):
+                continue
+            try:
+                candidates[0] = enricher(candidates[0])
+            except Exception:
+                # Search correctness must not be downgraded by optional metadata.
+                pass
+            break
+
     def search_platform(
         self,
         platform: str,
@@ -379,6 +397,7 @@ class SearchCoordinator:
         if anchor_summary:
             ranked = rank_candidates(target, list(unique_candidates.values()))
         accepted, rejected = partition_ranked_candidates(target, ranked)
+        self._enrich_top_candidate(adapters, accepted)
         status = determine_search_status(accepted, attempts)
         if (
             not accepted

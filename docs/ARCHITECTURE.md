@@ -26,6 +26,8 @@ SQLite 使用 WAL 模式，保存任务状态、租约、观测、不可变快�
 
 元数据补充不保存 `musicdl.raw_data`。适配器只读取经过审计的平台字段路径，将日期归一化为 `YYYY-MM-DD`，并在 `metadata_evidence` 中记录具体来源路径。当前已实测网易云 `publishTime`、QQ `time_public` 与歌手 MID、酷狗 `PublishDate` 与歌手头像模板、酷我 `web_artistpic_short`。QQ 搜索采用 `musicdl` 构造并签名的官方加密端点；若下载解析失败，搜索元数据仍以 `metadata_only` 候选保留。内联歌词通过独立 MCP 工具写入 UTF-8 文件，留痕仅含完整性元数据。
 
+汽水搜索卡片不包含完整发行信息。匹配候选确定后，适配器以歌曲返回的 `album_id` 读取官方专辑详情，提取 `release_date` 与客户端页脚中的 `©`/`℗` 权利主体，分别保存为 `release_date`、`release_company_raw`、`release_company_kind`，并写入 `metadata_evidence`。权利主体和唱片厂牌在语义上不强行等同。
+
 候选排序只负责召回顺序，不等于验收。进入 observation 前还必须通过平台 ID 形状、标题相似度、歌手相似度和版本兼容性门槛；未通过的候选保留在 `rejected_candidate_summaries`，不会占用结果字段。Gandalf 的 ID 先做平台格式校验，再做官方详情回查；其会话在单个采集进程内复用，避免逐查询登录和过度调用。
 
 `NO_CONFIDENT_MATCH` 表示平台原生搜索成功，但返回项均未通过证据门槛；它不是“平台已穷尽不存在”。`SEARCH_PARTIAL` 专用于接口错误、限流或非穷尽空响应，并在持久 Worker 冻结前自动退避重试。

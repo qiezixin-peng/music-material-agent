@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/guohuiyuan/music-lib/model"
@@ -33,17 +34,20 @@ type songInput struct {
 }
 
 type candidate struct {
-	ID       string            `json:"id"`
-	Name     string            `json:"name"`
-	Artist   string            `json:"artist"`
-	Album    string            `json:"album"`
-	AlbumID  string            `json:"album_id,omitempty"`
-	Duration int               `json:"duration,omitempty"`
-	Size     int64             `json:"size,omitempty"`
-	Bitrate  int               `json:"bitrate,omitempty"`
-	Cover    string            `json:"cover,omitempty"`
-	Extra    map[string]string `json:"extra,omitempty"`
-	IsVIP    bool              `json:"is_vip,omitempty"`
+	ID                 string            `json:"id"`
+	Name               string            `json:"name"`
+	Artist             string            `json:"artist"`
+	Album              string            `json:"album"`
+	AlbumID            string            `json:"album_id,omitempty"`
+	Duration           int               `json:"duration,omitempty"`
+	Size               int64             `json:"size,omitempty"`
+	Bitrate            int               `json:"bitrate,omitempty"`
+	Cover              string            `json:"cover,omitempty"`
+	ReleaseDate        int64             `json:"release_date,omitempty"`
+	ReleaseCompanyRaw  string            `json:"release_company_raw,omitempty"`
+	ReleaseCompanyKind string            `json:"release_company_kind,omitempty"`
+	Extra              map[string]string `json:"extra,omitempty"`
+	IsVIP              bool              `json:"is_vip,omitempty"`
 }
 
 type response struct {
@@ -106,7 +110,48 @@ func resolve(client *soda.Soda, input *songInput) response {
 	if song == nil || strings.TrimSpace(song.ID) == "" {
 		return response{Status: "RESOLVE_UNAVAILABLE", Error: "Soda returned no track metadata"}
 	}
-	return response{Status: "OK", Candidates: []candidate{candidateFromSong(*song)}}
+	item := candidateFromSong(*song)
+	enrichCandidateFromAlbum(client, &item)
+	return response{Status: "OK", Candidates: []candidate{item}}
+}
+
+// enrichCandidateFromAlbum follows the album ID exposed by the official track
+// response.  Soda renders the release date and copyright/issuing company on the
+// album detail page, not on the track search card.
+func enrichCandidateFromAlbum(client *soda.Soda, item *candidate) {
+	albumID := strings.TrimSpace(item.AlbumID)
+	if albumID == "" {
+		return
+	}
+	album, _, err := client.ParseAlbum("https://www.qishui.com/album/" + albumID)
+	if err != nil || album == nil {
+		return
+	}
+	if album.Extra != nil {
+		item.ReleaseDate, _ = strconv.ParseInt(
+			strings.TrimSpace(album.Extra["release_date"]), 10, 64,
+		)
+	}
+	description := strings.TrimSpace(album.Description)
+	if description == "" {
+		return
+	}
+	if marker := strings.LastIndex(description, "©"); marker >= 0 {
+		item.ReleaseCompanyRaw = strings.TrimSpace(description[marker+len("©"):])
+		item.ReleaseCompanyKind = "copyright_notice"
+		return
+	}
+	if marker := strings.LastIndex(description, "℗"); marker >= 0 {
+		item.ReleaseCompanyRaw = strings.TrimSpace(description[marker+len("℗"):])
+		item.ReleaseCompanyKind = "phonographic_copyright_notice"
+		return
+	}
+	// music-lib uses the platform's album company as Description when the page
+	// has no explicit PC footer lines. Avoid treating a date-only line as a label.
+	if !strings.Contains(description, "发行时间") {
+		item.ReleaseCompanyRaw = description
+		item.ReleaseCompanyKind = "platform_company"
+	}
 }
 
 func candidateFromSong(song model.Song) candidate {

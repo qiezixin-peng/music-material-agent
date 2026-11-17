@@ -17,6 +17,8 @@ FIELDS = (
     "artists_raw",
     "album_raw",
     "release_date",
+    "release_company_raw",
+    "release_company_kind",
     "cover_url",
     "cover_path",
     "cover_status",
