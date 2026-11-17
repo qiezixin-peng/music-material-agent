@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import re
+import time
 from threading import Lock
 from pathlib import Path
 from typing import Any, Callable
@@ -313,6 +314,14 @@ class MusicDlAdapter:
         self._client_factory = client_factory
         self._client: Any | None = None
         self._search_lock = Lock()
+        self._last_official_request_at = 0.0
+
+    def _pace_official_request(self, minimum_interval_s: float) -> None:
+        elapsed = time.monotonic() - self._last_official_request_at
+        remaining = float(minimum_interval_s) - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+        self._last_official_request_at = time.monotonic()
 
     def _factory(self) -> Callable[..., Any]:
         if self._client_factory is not None:
@@ -425,26 +434,34 @@ class MusicDlAdapter:
 
     def _search_official_metadata(self, source: Any, query: str) -> list[dict[str, Any]]:
         """Use musicdl's platform request construction but skip audio URL parsing."""
-        search_meta = source._constructsearchurls(query)[0]
         timeout = (5, 20)
         if self.platform == "qq":
             source.use_encrypted_endpoint = True
-            search_meta = dict(search_meta)
-            search_url = search_meta.pop("url")
-            search_meta.pop("page_no", None)
-            response = source.post(search_url, timeout=timeout, **search_meta)
-            response.raise_for_status()
-            module = response.json().get(
-                "music.search.SearchCgiService.DoSearchForQQMusicMobile", {}
-            )
-            if module.get("code") != 0:
-                raise RuntimeError(f"QQ official search code={module.get('code')}")
+            module: dict[str, Any] = {}
+            for attempt in range(3):
+                self._pace_official_request(0.8)
+                search_meta = dict(source._constructsearchurls(query)[0])
+                search_url = search_meta.pop("url")
+                search_meta.pop("page_no", None)
+                response = source.post(search_url, timeout=timeout, **search_meta)
+                response.raise_for_status()
+                module = response.json().get(
+                    "music.search.SearchCgiService.DoSearchForQQMusicMobile", {}
+                )
+                code = module.get("code")
+                if code == 0:
+                    break
+                if code == 2001 and attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise RuntimeError(f"QQ official search code={code}")
             items = module.get("data", {}).get("body", {}).get("item_song", [])
             return [
                 _qq_metadata_candidate(item)
                 for item in items
                 if isinstance(item, dict) and (item.get("mid") or item.get("songmid"))
             ]
+        search_meta = source._constructsearchurls(query)[0]
         if self.platform == "netease":
             search_meta = dict(search_meta)
             search_url = search_meta.pop("url")

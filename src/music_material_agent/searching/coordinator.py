@@ -126,6 +126,10 @@ class SearchCoordinator:
         invalid_platform_ids = 0
         for item in anchor_items:
             identifier = str(item.get("platform_id") or "").strip()
+            item_platform = str(item.get("platform") or "").strip().casefold()
+            if item_platform and item_platform != platform.casefold():
+                invalid_platform_ids += 1
+                continue
             if not valid_platform_id(platform, identifier):
                 invalid_platform_ids += 1
                 continue
@@ -375,9 +379,17 @@ class SearchCoordinator:
         if anchor_summary:
             ranked = rank_candidates(target, list(unique_candidates.values()))
         accepted, rejected = partition_ranked_candidates(target, ranked)
+        status = determine_search_status(accepted, attempts)
+        if (
+            not accepted
+            and rejected
+            and attempts
+            and all(attempt.get("status") == "OK" for attempt in attempts)
+        ):
+            status = "NO_CONFIDENT_MATCH"
         result = {
             "platform": platform,
-            "status": determine_search_status(accepted, attempts),
+            "status": status,
             "queries": queries,
             "attempts": attempts,
             "candidates": accepted,

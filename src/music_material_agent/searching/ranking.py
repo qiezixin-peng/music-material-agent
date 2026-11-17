@@ -64,10 +64,22 @@ def rank_candidates(target: dict[str, Any], candidates: list[dict[str, Any]]) ->
     title_variants = [value for value in title_variants if str(value).strip()]
     for candidate in candidates:
         title = str(candidate.get("title_raw") or candidate.get("title") or "")
+        candidate_title_variants = [title, base_title(title)]
+        candidate_title_variants.extend(BRACKET_PATTERN.findall(title))
+        candidate_title_variants = [
+            value for value in candidate_title_variants if str(value).strip()
+        ]
         platform_id = str(candidate.get("platform_id") or "")
         reasons: list[str] = []
         exact_id = bool(target_platform_id and platform_id and target_platform_id == platform_id)
-        title_score = max((_similarity(value, title) for value in title_variants), default=0.0)
+        title_score = max(
+            (
+                _similarity(target_value, candidate_value)
+                for target_value in title_variants
+                for candidate_value in candidate_title_variants
+            ),
+            default=0.0,
+        )
         artist_score = _artist_score(target_artists, candidate.get("artists") or candidate.get("artist"))
         album_score = _similarity(target.get("album"), candidate.get("album_raw") or candidate.get("album"))
         duration_score = _duration_score(target.get("duration_s"), candidate.get("duration_s"))

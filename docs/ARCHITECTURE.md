@@ -28,6 +28,8 @@ SQLite 使用 WAL 模式，保存任务状态、租约、观测、不可变快�
 
 候选排序只负责召回顺序，不等于验收。进入 observation 前还必须通过平台 ID 形状、标题相似度、歌手相似度和版本兼容性门槛；未通过的候选保留在 `rejected_candidate_summaries`，不会占用结果字段。Gandalf 的 ID 先做平台格式校验，再做官方详情回查；其会话在单个采集进程内复用，避免逐查询登录和过度调用。
 
+`NO_CONFIDENT_MATCH` 表示平台原生搜索成功，但返回项均未通过证据门槛；它不是“平台已穷尽不存在”。`SEARCH_PARTIAL` 专用于接口错误、限流或非穷尽空响应，并在持久 Worker 冻结前自动退避重试。
+
 状态机把“事实不存在”和“技术上没拿到”分开。`AUTH_REQUIRED`、`RATE_LIMITED`、`SEARCH_UNAVAILABLE`、`SEARCH_PARTIAL`、`FOUND_CANDIDATES` 均不能降级为 `NOT_FOUND_EXHAUSTIVE`。
 
 音频自动化遵守无 UI 约束：汽水通过 headless helper 下载；网易云、QQ、酷狗、酷我通过 `musicdl` 的 Python 后端在单一进程内重新取得精确 ID 的短期音频引用，直接写入 staging。项目不调用 `musicdl` 旧 Web 服务，也不保存其包含短期 URL 的下载结果 pickle；文件必须通过签名、FFprobe、时长和 SHA-256 验证后才进入正式目录。

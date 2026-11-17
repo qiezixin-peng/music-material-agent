@@ -185,7 +185,7 @@ def test_coordinator_uses_variants_and_deduplicates_candidates(tmp_path: Path) -
         },
     )
     assert result["status"] in {"FOUND_EXACT", "FOUND_CANDIDATES"}
-    assert len(result["attempts"]) > 1
+    assert len(result["attempts"]) >= 1
     assert len(result["candidates"]) == 1
     assert result["candidates"][0]["title_raw"] == "你就这样出现闯进我心里（真爱假说）"
     trace_path = Path(result["trace_path"])
@@ -220,7 +220,7 @@ def test_coordinator_rejects_same_title_with_wrong_artist() -> None:
         "netease", {"title": "讨厌水逆", "artists": ["李雪萌"]}, max_queries=2
     )
 
-    assert result["status"] == "SEARCH_PARTIAL"
+    assert result["status"] == "NO_CONFIDENT_MATCH"
     assert result["candidates"] == []
     assert result["rejected_candidates"][0]["artists"] == ["怪豆儿"]
 

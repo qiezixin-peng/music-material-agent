@@ -34,6 +34,8 @@ def normalize_release_date(value: Any) -> str | None:
         return None
     if isinstance(value, (int, float)):
         timestamp = float(value)
+        if timestamp <= 0:
+            return None
         if timestamp > 10_000_000_000:
             timestamp /= 1000
         try:

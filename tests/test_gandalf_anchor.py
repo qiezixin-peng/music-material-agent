@@ -53,3 +53,23 @@ def test_gandalf_reuses_one_authenticated_session() -> None:
     client.close()
 
     assert logins == 1
+
+
+def test_gandalf_404_means_no_anchor_not_backend_failure() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth/login":
+            return httpx.Response(200, json={"ok": True})
+        if request.url.path == "/api/songs":
+            return httpx.Response(404, json={"detail": "Not Found"})
+        return httpx.Response(200, json={"username": "test"})
+
+    client = GandalfAnchorClient(
+        credentials_provider=lambda: Credentials("user", "password"),
+        client_factory=lambda **kwargs: httpx.Client(
+            transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+    result = client.search("不存在", platform="qq")
+    client.close()
+
+    assert result["status"] == "NO_ANCHOR"

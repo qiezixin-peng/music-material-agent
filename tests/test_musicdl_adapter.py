@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from music_material_agent.adapters.base import SearchRequest
+from music_material_agent.adapters import musicdl_adapter as musicdl_adapter_module
 from music_material_agent.adapters.musicdl_adapter import (
     MusicDlAdapter,
     _detail_metadata_candidate,
@@ -106,6 +107,7 @@ def test_release_date_rejects_partial_or_invalid_dates() -> None:
     assert normalize_release_date("1993") is None
     assert normalize_release_date("1993-02-30") is None
     assert normalize_release_date(None) is None
+    assert normalize_release_date(0) is None
 
 
 def test_qq_official_metadata_candidate_survives_missing_audio() -> None:
@@ -168,6 +170,53 @@ def test_qq_adapter_falls_back_to_official_search_metadata(tmp_path: Path) -> No
     assert response.status == "OK"
     assert response.candidates[0]["platform_id"] == "qq-mid"
     assert response.candidates[0]["release_date"] == "2020-01-02"
+
+
+def test_qq_official_search_retries_transient_code_2001(tmp_path: Path, monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, code: int):
+            self.code = code
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            item_song = [] if self.code else [{
+                "mid": "0016LEhu3KaZ8H",
+                "title": "我们一起灿烂过的那些年",
+                "singer": [{"name": "七哼Qhyung"}],
+                "album": {"title": "同名专辑"},
+            }]
+            return {
+                "music.search.SearchCgiService.DoSearchForQQMusicMobile": {
+                    "code": self.code,
+                    "data": {"body": {"item_song": item_song}},
+                }
+            }
+
+    class FakeSource:
+        use_encrypted_endpoint = False
+        calls = 0
+
+        def _constructsearchurls(self, keyword: str):
+            return [{"url": "https://u.y.qq.com/search", "page_no": 1, "data": b"{}"}]
+
+        def post(self, url: str, **kwargs):
+            self.calls += 1
+            return FakeResponse(2001 if self.calls == 1 else 0)
+
+    source = FakeSource()
+
+    class FakeClient:
+        music_clients = {"QQMusicClient": source}
+
+    monkeypatch.setattr(musicdl_adapter_module.time, "sleep", lambda _seconds: None)
+    adapter = MusicDlAdapter("qq", work_dir=tmp_path, client_factory=lambda **_: FakeClient())
+    response = adapter.search(SearchRequest(platform="qq", query="测试歌曲"))
+
+    assert response.status == "OK"
+    assert source.calls == 2
+    assert response.candidates[0]["platform_id"] == "0016LEhu3KaZ8H"
 
 
 def test_qq_adapter_resolves_exact_id_without_keyword_or_audio(tmp_path: Path) -> None:

@@ -84,8 +84,11 @@ class GandalfAnchorClient:
                 self._authenticated = False
                 client = self._ensure_login(credentials)
                 response = client.get("/api/songs", params=params)
-            response.raise_for_status()
-            payload = response.json()
+            if response.status_code == 404:
+                payload = {"items": []}
+            else:
+                response.raise_for_status()
+                payload = response.json()
         except PermissionError:
             return {"status": "AUTH_REQUIRED", "role": "anchor_only", "authoritative": False, "candidates": []}
         except Exception as error:
