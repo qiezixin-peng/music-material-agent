@@ -15,6 +15,7 @@ import httpx
 
 from .base import SearchRequest, SearchResponse
 from .musicdl_enrichment import extract_musicdl_enrichment
+from .platform_links import add_platform_links
 from ..searching.planner import split_artists
 
 
@@ -74,8 +75,10 @@ def song_info_to_candidate(song: Any, platform: str) -> dict[str, Any]:
         },
         "root_source": getattr(song, "root_source", None),
     }
-    candidate.update(extract_musicdl_enrichment(getattr(song, "raw_data", None), platform))
-    return candidate
+    raw_data = getattr(song, "raw_data", None)
+    candidate.update(extract_musicdl_enrichment(raw_data, platform))
+    raw_item = raw_data.get("search", raw_data) if isinstance(raw_data, dict) else {}
+    return add_platform_links(candidate, platform, raw_item=raw_item)
 
 
 def _qq_metadata_candidate(item: dict[str, Any]) -> dict[str, Any]:
@@ -137,7 +140,7 @@ def _qq_metadata_candidate(item: dict[str, Any]) -> dict[str, Any]:
                 "source": "musicdl.official_search.singer.0.mid",
             }
         )
-    return candidate
+    return add_platform_links(candidate, "qq", raw_item=item)
 
 
 def _official_search_metadata_candidate(
@@ -230,7 +233,7 @@ def _official_search_metadata_candidate(
         "metadata_only": True,
     }
     candidate.update(extract_musicdl_enrichment({"search": item}, platform))
-    return candidate
+    return add_platform_links(candidate, platform, raw_item=item)
 
 
 def _detail_metadata_candidate(
@@ -305,7 +308,7 @@ def _detail_metadata_candidate(
         "metadata_only": True,
     }
     candidate.update(extract_musicdl_enrichment({"search": item}, platform))
-    return candidate
+    return add_platform_links(candidate, platform, raw_item=item)
 
 
 class MusicDlAdapter:
@@ -661,7 +664,22 @@ class MusicDlAdapter:
             response.raise_for_status()
             items = response.json().get("result", {}).get("songs", [])
         elif self.platform == "kugou":
-            response = source.get(search_meta, timeout=timeout)
+            # musicdl's current URL omits the web client parameters that expose
+            # Kugou's canonical EMixSongID/EAlbumID routes. Keep musicdl as the
+            # backend, but request the same official endpoint with those fields.
+            response = source.get(
+                "https://songsearch.kugou.com/song_search_v2",
+                params={
+                    "format": "json",
+                    "keyword": query,
+                    "platform": "WebFilter",
+                    "page": 1,
+                    "pagesize": self.search_size,
+                    "clientver": 2000,
+                    "appid": 1014,
+                },
+                timeout=timeout,
+            )
             response.raise_for_status()
             items = response.json().get("data", {}).get("lists", [])
         elif self.platform == "kuwo":

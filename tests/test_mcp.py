@@ -15,6 +15,7 @@ async def test_mcp_registers_durable_workflow_tools() -> None:
         "classify_search_result",
         "get_search_capabilities",
         "search_track_everywhere",
+        "collect_music_url",
         "create_job",
         "claim_platform_partition",
         "record_platform_observation",

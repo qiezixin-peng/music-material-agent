@@ -17,6 +17,7 @@ import httpx
 
 from .base import SearchRequest, SearchResponse
 from .musicdl_enrichment import normalize_release_date
+from .platform_links import add_platform_links
 from ..media import inspect_media_file
 from ..paths import ProjectPaths
 from ..searching.planner import split_artists
@@ -29,6 +30,7 @@ SODA_PROFILE = Path(os.environ.get("APPDATA", "")) / "SodaMusic"
 GO_MUSIC_DL_ADMIN_SERVICE = "music-material-agent:go-music-dl-admin"
 SODA_EXTRA_ALLOWLIST = {
     "album_id",
+    "artist_ids",
     "is_vip",
     "only_vip_download",
     "only_vip_playable",
@@ -364,6 +366,13 @@ class GoMusicDlAdapter:
                 "extra": _safe_soda_extra(item.get("extra")),
             },
         }
+        artist_ids = [
+            str(value).strip()
+            for value in (item.get("artist_ids") or [])
+            if str(value).strip()
+        ]
+        if artist_ids:
+            candidate["artist_ids"] = artist_ids
         evidence: list[dict[str, str]] = []
         if release_date := normalize_release_date(item.get("release_date")):
             candidate["release_date"] = release_date
@@ -384,7 +393,7 @@ class GoMusicDlAdapter:
             )
         if evidence:
             candidate["metadata_evidence"] = evidence
-        return candidate
+        return add_platform_links(candidate, "soda")
 
     def enrich_candidate(self, candidate: dict[str, Any]) -> dict[str, Any]:
         """Re-resolve one accepted Soda track so album-footer metadata is retained."""
@@ -406,6 +415,11 @@ class GoMusicDlAdapter:
             "release_company_raw",
             "release_company_kind",
             "metadata_evidence",
+            "song_url",
+            "album_url",
+            "artist_ids",
+            "artist_homepage_url",
+            "artist_homepage_urls",
         ):
             if resolved.get(field) not in (None, "", []):
                 merged[field] = resolved[field]

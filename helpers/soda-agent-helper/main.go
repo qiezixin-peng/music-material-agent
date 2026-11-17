@@ -16,7 +16,7 @@ import (
 	"github.com/guohuiyuan/music-lib/model"
 	"github.com/guohuiyuan/music-lib/netease"
 	"github.com/guohuiyuan/music-lib/qq"
-	"github.com/guohuiyuan/music-lib/soda"
+	soda "music-material-agent/soda-agent-helper/sodafork"
 )
 
 type request struct {
@@ -50,6 +50,10 @@ type candidate struct {
 	Size               int64             `json:"size,omitempty"`
 	Bitrate            int               `json:"bitrate,omitempty"`
 	Cover              string            `json:"cover,omitempty"`
+	SongURL            string            `json:"song_url,omitempty"`
+	AlbumURL           string            `json:"album_url,omitempty"`
+	ArtistIDs          []string          `json:"artist_ids,omitempty"`
+	ArtistHomepageURLs []string          `json:"artist_homepage_urls,omitempty"`
 	ReleaseDate        int64             `json:"release_date,omitempty"`
 	ReleaseCompanyRaw  string            `json:"release_company_raw,omitempty"`
 	ReleaseCompanyKind string            `json:"release_company_kind,omitempty"`
@@ -135,6 +139,8 @@ func resolveAlbumMetadata(platform string, albumID string) response {
 	var album *model.Playlist
 	var err error
 	switch platform {
+	case "soda":
+		album, _, err = soda.New("").ParseAlbum("https://www.qishui.com/album/" + albumID)
 	case "netease":
 		album, _, err = netease.ParseAlbum("https://music.163.com/#/album?id=" + albumID)
 	case "qq":
@@ -241,12 +247,32 @@ func enrichCandidateFromAlbum(client *soda.Soda, item *candidate) {
 }
 
 func candidateFromSong(song model.Song) candidate {
+	artistIDs := splitIDs(song.Extra["artist_ids"])
+	artistURLs := make([]string, 0, len(artistIDs))
+	for _, id := range artistIDs {
+		artistURLs = append(artistURLs, "luna://luna.com/artist/"+id)
+	}
+	albumURL := ""
+	if strings.TrimSpace(song.AlbumID) != "" {
+		albumURL = "https://www.qishui.com/album/" + strings.TrimSpace(song.AlbumID)
+	}
 	return candidate{
 		ID: song.ID, Name: song.Name, Artist: song.Artist, Album: song.Album,
 		AlbumID: song.AlbumID, Duration: song.Duration, Size: song.Size,
-		Bitrate: song.Bitrate, Cover: song.Cover,
+		Bitrate: song.Bitrate, Cover: song.Cover, SongURL: song.Link,
+		AlbumURL: albumURL, ArtistIDs: artistIDs, ArtistHomepageURLs: artistURLs,
 		Extra: song.Extra, IsVIP: song.IsVIP,
 	}
+}
+
+func splitIDs(value string) []string {
+	result := []string{}
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
 }
 
 func download(client *soda.Soda, input *songInput, outputPath string) response {

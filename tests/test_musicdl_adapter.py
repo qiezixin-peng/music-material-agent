@@ -71,7 +71,11 @@ def test_musicdl_extracts_only_allowlisted_netease_release_metadata() -> None:
     assert candidate["metadata_evidence"] == [{
         "field": "release_date",
         "source": "musicdl.raw_data.search.publishTime",
+    }, {
+        "field": "song_url",
+        "source": "netease.verified_id_route",
     }]
+    assert candidate["song_url"] == "https://music.163.com/#/song?id=123"
     assert "raw_data" not in candidate
     assert "secret" not in repr(candidate)
 

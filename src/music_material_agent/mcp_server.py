@@ -187,6 +187,18 @@ def inspect_music_page(url: str, job_id: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
+def collect_music_url(url: str, job_id: str | None = None) -> dict[str, Any]:
+    """Collect one supported singer homepage, song URL or album URL and retain native/page evidence."""
+    from .url_collection import collect_music_url as collect
+
+    if job_id:
+        trace_dir = service.paths.trace_dir(job_id) / "raw" / "music-url"
+    else:
+        trace_dir = _new_search_runtime() / "music-url"
+    return collect(url, trace_dir)
+
+
+@mcp.tool()
 def gandalf_anchor_health() -> dict[str, Any]:
     """Check the optional Gandalf anchor without exposing credentials."""
     from .adapters.gandalf_anchor import GandalfAnchorClient
