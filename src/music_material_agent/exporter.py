@@ -15,6 +15,7 @@ FIELDS = (
     "platform_id",
     "song_id",
     "song_id_type",
+    "native_song_ids",
     "kugou_mix_song_id",
     "title_raw",
     "artists_raw",

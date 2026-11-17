@@ -136,6 +136,7 @@ def _observation_data(candidate: dict[str, Any], requested_fields: list[str] | N
         "platform_id",
         "song_id",
         "song_id_type",
+        "native_song_ids",
         "kugou_mix_song_id",
         "title_raw",
         "artists_raw",

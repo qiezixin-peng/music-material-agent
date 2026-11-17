@@ -38,6 +38,7 @@ def test_qq_links_include_song_album_and_all_artists() -> None:
         },
         "qq",
         raw_item={
+            "id": 102065756,
             "singer": [
                 {"mid": "002pUZT93gF4Cu"},
                 {"mid": "003Nz2So3XXYek"},
@@ -47,6 +48,10 @@ def test_qq_links_include_song_album_and_all_artists() -> None:
     assert candidate["song_url"].endswith("/songDetail/001yS0N33yPm1B")
     assert candidate["song_id"] == "001yS0N33yPm1B"
     assert candidate["song_id_type"] == "song_mid"
+    assert candidate["native_song_ids"] == {
+        "mid": "001yS0N33yPm1B",
+        "id": "102065756",
+    }
     assert candidate["album_url"].endswith("/albumDetail/002qcJuX3lO3EZ")
     assert len(candidate["artist_homepage_urls"]) == 2
 
@@ -69,12 +74,24 @@ def test_kugou_never_invents_web_route_from_file_hash() -> None:
     candidate = add_platform_links(
         {"platform_id": "C41E80A18D1448FA47086372999C7F43", "album_id": "973001"},
         "kugou",
-        raw_item={"EMixSongID": "j576z7e", "EAlbumID": "kurt9f", "SingerId": [7249]},
+        raw_item={
+            "EMixSongID": "j576z7e",
+            "EAlbumID": "kurt9f",
+            "SingerId": [7249],
+            "audio_id": 9988,
+            "album_audio_id": 7766,
+        },
     )
     assert candidate["song_url"] == "https://www.kugou.com/mixsong/j576z7e.html"
     assert candidate["song_id"] == "C41E80A18D1448FA47086372999C7F43"
     assert candidate["song_id_type"] == "file_hash"
     assert candidate["kugou_mix_song_id"] == "j576z7e"
+    assert candidate["native_song_ids"] == {
+        "hash": "C41E80A18D1448FA47086372999C7F43",
+        "audio_id": "9988",
+        "album_audio_id": "7766",
+        "emix_song_id": "j576z7e",
+    }
     assert candidate["album_url"] == "https://www.kugou.com/album/973001.html"
     assert "C41E80" not in candidate["song_url"]
     assert candidate["artist_homepage_url"] == "https://m.kugou.com/singer/info/7249"
@@ -85,6 +102,7 @@ def test_link_fields_are_formal_workbook_columns() -> None:
         "song_url",
         "song_id",
         "song_id_type",
+        "native_song_ids",
         "kugou_mix_song_id",
         "album_url",
         "artist_ids",

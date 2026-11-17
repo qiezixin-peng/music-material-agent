@@ -27,6 +27,59 @@ def _nested_list(item: dict[str, Any], *keys: str) -> list[dict[str, Any]]:
     return []
 
 
+def _first_native_value(item: dict[str, Any], *keys: str) -> str:
+    """Read an audited identifier whitelist without retaining a raw response."""
+    folded = {str(key).casefold(): value for key, value in item.items()}
+    for key in keys:
+        value = folded.get(key.casefold())
+        if value not in (None, ""):
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
+
+
+def extract_native_song_ids(
+    candidate: dict[str, Any], item: dict[str, Any], platform: str
+) -> dict[str, str]:
+    """Keep platform-owned song identifiers useful for an exact lookup."""
+    primary = str(candidate.get("platform_id") or "").strip()
+    backend_extra = (candidate.get("backend_ref") or {}).get("extra") or {}
+    if not isinstance(backend_extra, dict):
+        backend_extra = {}
+    values: dict[str, str] = {}
+
+    def keep(name: str, value: object) -> None:
+        text = str(value or "").strip()
+        if text and text not in values.values():
+            values[name] = text
+
+    if platform == "soda":
+        keep("sid", primary)
+        keep("track_id", _first_native_value(backend_extra, "track_id"))
+    elif platform == "netease":
+        keep("id", primary)
+        keep("song_id", _first_native_value(item, "song_id", "songid"))
+    elif platform == "qq":
+        keep("mid", primary)
+        keep("id", _first_native_value(item, "id", "songid", "song_id"))
+    elif platform == "kugou":
+        keep("hash", primary)
+        keep("audio_id", _first_native_value(item, "audio_id", "audioid"))
+        keep("album_audio_id", _first_native_value(item, "album_audio_id"))
+        keep(
+            "emix_song_id",
+            _first_native_value(item, "EMixSongID", "emixsongid", "encode_album_audio_id"),
+        )
+    elif platform == "kuwo":
+        keep("music_id", primary)
+        rid = _first_native_value(item, "musicrid", "rid")
+        if rid.upper().startswith("MUSIC_"):
+            rid = rid[6:]
+        keep("rid", rid)
+    return values
+
+
 def extract_artist_ids(item: dict[str, Any], platform: str) -> list[str]:
     if platform == "netease":
         return _ids(a.get("id") for a in _nested_list(item, "ar", "artists"))
@@ -72,6 +125,7 @@ def add_platform_links(
             "kugou": "file_hash",
             "kuwo": "music_id",
         }.get(platform, "platform_song_id")
+        result["native_song_ids"] = extract_native_song_ids(result, item, platform)
     album_id = str(result.get("album_id") or "").strip()
     artist_ids = extract_artist_ids(item, platform)
     if result.get("artist_ids"):
@@ -100,6 +154,7 @@ def add_platform_links(
         encoded_album = str(item.get("EAlbumID") or item.get("ealbumid") or item.get("encode_album_id") or "").strip()
         if _SAFE_ID.fullmatch(mix_id):
             result["kugou_mix_song_id"] = mix_id
+            result.setdefault("native_song_ids", {})["emix_song_id"] = mix_id
             song_url = f"https://www.kugou.com/mixsong/{mix_id}.html"
         # Keep the numeric route as the canonical agent hand-off: music-lib and
         # Kugou's detail APIs can resolve it without reversing EAlbumID.
