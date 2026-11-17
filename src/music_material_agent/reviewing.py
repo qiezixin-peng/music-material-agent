@@ -37,6 +37,10 @@ def _review_decision(
         if fresh_status == "NOT_FOUND_EXHAUSTIVE":
             return "VERIFIED", {}
         return "INSUFFICIENT_EVIDENCE", {}
+    if source_status == "NO_CONFIDENT_MATCH":
+        if fresh_status in FOUND:
+            return "CORRECTION_PROPOSED", _observation_data(best)
+        return "INSUFFICIENT_EVIDENCE", {}
     if source_status in TECHNICAL:
         if fresh_status in FOUND:
             return "CORRECTION_PROPOSED", _observation_data(best)

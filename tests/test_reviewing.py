@@ -92,3 +92,16 @@ def test_review_decision_proposes_correction_after_prior_technical_failure() -> 
     )
     assert verdict == "CORRECTION_PROPOSED"
     assert patch["platform_id"] == "official-id"
+
+
+def test_review_can_correct_a_prior_no_confident_match() -> None:
+    verdict, patch = _review_decision(
+        "NO_CONFIDENT_MATCH",
+        {},
+        {
+            "status": "FOUND_CANDIDATES",
+            "candidates": [{"platform_id": "recovered-id", "title_raw": "平台名称"}],
+        },
+    )
+    assert verdict == "CORRECTION_PROPOSED"
+    assert patch["platform_id"] == "recovered-id"
