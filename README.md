@@ -43,6 +43,9 @@ uv run music-material doctor
 uv run pytest
 uv run music-material-mcp
 uv run music-material mcp-http --host 127.0.0.1 --port 8766
+./scripts/start_shared_mcp.ps1
+./scripts/status_shared_mcp.ps1
+./scripts/stop_shared_mcp.ps1
 ```
 
 ## 默认目录
@@ -54,6 +57,8 @@ uv run music-material mcp-http --host 127.0.0.1 --port 8766
 账号、密码和 Cookie 不写入任务表、日志、MCP 参数或 Git。汽水 Cookie 仅通过 helper 的标准输入在内存中传递；签名身份写入被 Git 忽略的本机运行数据目录。正常工作流不需要扫码登录。
 
 `mcp-http` 提供 `http://127.0.0.1:8766/mcp`，可由多个 Agent 窗口共享；stdio 模式保留给只支持本地进程型 MCP 的客户端。
+
+`start_shared_mcp.ps1` 在隐藏进程中启动同一个 localhost MCP；状态记录在被 Git 忽略的 `data/runtime/shared-mcp.json`，标准输出和错误日志位于 `D:\三喜\临时文件\音乐物料MCP服务-共享`。停止脚本会核对 PID 的实际可执行文件，避免误停其他进程。
 
 物料工具分为两类：`download_verified_asset` 处理封面、头像或远程歌词 URL；`save_verified_lyric_text` 处理 `musicdl` 候选中已经内联返回的歌词。两者都先写 staging，通过验证后才移动到正式任务输出。
 

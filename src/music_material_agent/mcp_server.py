@@ -20,7 +20,9 @@ mcp = MCPServer(
     instructions=(
         "Durable music material jobs shared by all local agents. Long work is identified by job_id. "
         "Never report a platform as not containing a track unless the recorded status is "
-        "NOT_FOUND_EXHAUSTIVE. Preserve platform-native titles and evidence."
+        "NOT_FOUND_EXHAUSTIVE. Preserve platform-native titles and evidence. Prefer the resumable "
+        "collect_platform_batch, review_platform_batch and collect_materials_batch tools over "
+        "manual per-row writes; finalize_job enforces strict coverage."
     ),
 )
 
