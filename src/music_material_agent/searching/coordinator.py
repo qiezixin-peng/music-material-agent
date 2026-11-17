@@ -233,7 +233,6 @@ class SearchCoordinator:
             except Exception:
                 # Search correctness must not be downgraded by optional metadata.
                 pass
-            break
 
     def search_platform(
         self,
@@ -318,6 +317,7 @@ class SearchCoordinator:
                     accepted, rejected = partition_ranked_candidates(ranking_target, ranked)
                     if not accepted:
                         continue
+                    self._enrich_top_candidate(adapters, accepted)
                     result = {
                         "platform": platform,
                         "status": determine_search_status(accepted, attempts),

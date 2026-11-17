@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 from music_material_agent.adapters.base import SearchRequest
@@ -121,6 +122,7 @@ def test_qq_official_metadata_candidate_survives_missing_audio() -> None:
         "file": {"media_mid": "must-not-be-copied"},
     })
     assert candidate["platform_id"] == "001yS0N33yPm1B"
+    assert candidate["album_id"] == "002qcJuX3lO3EZ"
     assert candidate["release_date"] == "1993-05-14"
     assert candidate["audio"]["available"] is False
     assert candidate["metadata_only"] is True
@@ -251,7 +253,7 @@ def test_detail_candidate_converts_three_native_platform_shapes() -> None:
             "id": 347230,
             "name": "海阔天空",
             "ar": [{"name": "Beyond"}],
-            "al": {"name": "海阔天空"},
+            "al": {"id": 12345, "name": "海阔天空"},
             "dt": 326000,
             "publishTime": 747504000000,
         },
@@ -259,6 +261,7 @@ def test_detail_candidate_converts_three_native_platform_shapes() -> None:
         "347230",
     )
     assert netease["platform_id"] == "347230"
+    assert netease["album_id"] == "12345"
     assert netease["release_date"] == "1993-09-09"
     assert netease["duration_s"] == 326
 
@@ -267,6 +270,7 @@ def test_detail_candidate_converts_three_native_platform_shapes() -> None:
             "songname": "海阔天空",
             "singername": "BEYOND",
             "album_name": "乐与怒",
+            "album_id": "973001",
             "duration": 324.8,
             "song_detail": {
                 "hash": "ABC123",
@@ -278,15 +282,48 @@ def test_detail_candidate_converts_three_native_platform_shapes() -> None:
         "ABC123",
     )
     assert kugou["release_date"] == "1993-05-14"
+    assert kugou["album_id"] == "973001"
     assert kugou["artist_avatar_url"] == "http://img.test/400/artist.jpg"
 
     kuwo = _detail_metadata_candidate(
-        {"id": "228908", "songName": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269},
+        {"id": "228908", "songName": "晴天", "artist": "周杰伦", "album": "叶惠美", "albumId": "123", "duration": 269},
         "kuwo",
         "228908",
     )
     assert kuwo["artists"] == ["周杰伦"]
+    assert kuwo["album_id"] == "123"
     assert kuwo["metadata_only"] is True
+
+
+def test_kugou_signed_album_metadata_extracts_publish_company(monkeypatch) -> None:
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "status": 1,
+                "data": [{
+                    "album_id": "973001",
+                    "publish_date": "1993-05-14",
+                    "publish_company": "滚石唱片",
+                }],
+            }
+
+    def fake_post(url, **kwargs):
+        assert url == "http://kmr.service.kugou.com/v1/album"
+        assert len(kwargs["params"]["signature"]) == 32
+        body = json.loads(kwargs["content"].decode("utf-8"))
+        assert body["data"][0]["album_id"] == "973001"
+        assert "publish_company" in body["fields"]
+        return FakeResponse()
+
+    monkeypatch.setattr(musicdl_adapter_module.httpx, "post", fake_post)
+    result = MusicDlAdapter._fetch_kugou_album_metadata("973001")
+
+    assert result["release_date"] == "1993-05-14"
+    assert result["release_company_raw"] == "滚石唱片"
+    assert result["company_source"] == "kugou.kmr_album.publish_company"
 
 
 def test_musicdl_empty_result_is_not_exhaustive(tmp_path: Path) -> None:

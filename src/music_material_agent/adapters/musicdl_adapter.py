@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
+import json
+import os
 import re
+import subprocess
 import time
 from threading import Lock
 from pathlib import Path
 from typing import Any, Callable
+
+import httpx
 
 from .base import SearchRequest, SearchResponse
 from .musicdl_enrichment import extract_musicdl_enrichment
@@ -98,6 +104,7 @@ def _qq_metadata_candidate(item: dict[str, Any]) -> dict[str, Any]:
         "artists_raw": ", ".join(artist_names),
         "artists": artist_names,
         "album_raw": album.get("title") or item.get("albumname"),
+        "album_id": album_mid or None,
         "duration_s": item.get("interval"),
         "duration": None,
         "cover_url": (
@@ -149,6 +156,7 @@ def _official_search_metadata_candidate(
         artists_raw = ", ".join(artists)
         album = item.get("al") if isinstance(item.get("al"), dict) else {}
         album_raw = album.get("name")
+        album_id = str(album.get("id") or "")
         duration_s = float(item.get("dt") or 0) / 1000 or None
         cover_url = album.get("picUrl")
     elif platform == "kugou":
@@ -164,6 +172,7 @@ def _official_search_metadata_candidate(
         artists_raw = item.get("SingerName") or item.get("singername")
         artists = split_artists(artists_raw)
         album_raw = item.get("AlbumName") or item.get("album_name")
+        album_id = str(item.get("AlbumID") or item.get("album_id") or "")
         duration_s = item.get("Duration") or item.get("duration")
         cover_url = (
             (item.get("trans_param") or {}).get("union_cover")
@@ -184,6 +193,7 @@ def _official_search_metadata_candidate(
         artists_raw = item.get("ARTIST") or item.get("artist") or item.get("artistName")
         artists = split_artists(artists_raw)
         album_raw = item.get("ALBUM") or item.get("album") or item.get("albumName")
+        album_id = str(item.get("ALBUMID") or item.get("albumid") or "")
         duration_s = item.get("DURATION") or item.get("duration")
         cover_url = (
             item.get("web_albumpic_short")
@@ -202,6 +212,7 @@ def _official_search_metadata_candidate(
         "artists_raw": artists_raw,
         "artists": artists,
         "album_raw": album_raw,
+        "album_id": album_id or None,
         "duration_s": duration_s,
         "duration": None,
         "cover_url": cover_url,
@@ -244,6 +255,7 @@ def _detail_metadata_candidate(
         artists_raw = ", ".join(artist_names)
         album = item.get("al") if isinstance(item.get("al"), dict) else {}
         album_raw = album.get("name")
+        album_id = str(album.get("id") or "")
         duration_s = float(item.get("dt") or 0) / 1000 or None
         cover_url = album.get("picUrl")
     elif platform == "kugou":
@@ -252,6 +264,7 @@ def _detail_metadata_candidate(
         title = item.get("songname") or detail.get("songName")
         artists_raw = item.get("singername") or detail.get("author_name")
         album_raw = item.get("album_name")
+        album_id = str(item.get("album_id") or detail.get("album_id") or "")
         duration_s = item.get("duration")
         cover_url = item.get("cover_url") or detail.get("album_img")
         if isinstance(cover_url, str):
@@ -261,6 +274,7 @@ def _detail_metadata_candidate(
         title = item.get("songName") or item.get("name")
         artists_raw = item.get("artist") or item.get("artistName")
         album_raw = item.get("album") or item.get("albumName")
+        album_id = str(item.get("albumId") or item.get("albumid") or "")
         duration_s = item.get("duration")
         cover_url = item.get("pic") or item.get("pic120")
     else:
@@ -273,6 +287,7 @@ def _detail_metadata_candidate(
         "artists_raw": artists_raw,
         "artists": split_artists(artists_raw),
         "album_raw": album_raw,
+        "album_id": album_id or None,
         "duration_s": duration_s,
         "duration": None,
         "cover_url": cover_url,
@@ -369,6 +384,182 @@ class MusicDlAdapter:
                 "client": self.client_name,
                 "error": f"{type(error).__name__}: {error}",
             }
+
+    @staticmethod
+    def _fetch_kugou_album_metadata(album_id: str) -> dict[str, str]:
+        """Fetch Kugou's current signed KMR album fields without account state."""
+        appid = 1005
+        clientver = 20489
+        salt = "OIlwieks28dk2k092lksi2UIkp"
+        mid = hashlib.md5(os.urandom(32)).hexdigest()
+        now_ms = int(time.time() * 1000)
+        now_s = int(time.time())
+        fields = (
+            "album_id,album_name,publish_date,publish_company,authors,author_name"
+        )
+        body = {
+            "appid": appid,
+            "clienttime": now_ms,
+            "clientver": clientver,
+            "data": [{"album_id": album_id, "album_name": "", "author_name": ""}],
+            "dfid": "-",
+            "fields": fields,
+            "key": hashlib.md5(
+                f"{appid}{salt}{clientver}{now_ms}".encode("utf-8")
+            ).hexdigest(),
+            "mid": mid,
+        }
+        body_text = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+        params: dict[str, Any] = {
+            "dfid": "-",
+            "mid": mid,
+            "uuid": "-",
+            "appid": appid,
+            "clientver": clientver,
+            "clienttime": now_s,
+        }
+        parameter_text = "".join(
+            f"{key}={params[key]}" for key in sorted(params)
+        )
+        params["signature"] = hashlib.md5(
+            f"{salt}{parameter_text}{body_text}{salt}".encode("utf-8")
+        ).hexdigest()
+        response = httpx.post(
+            "http://kmr.service.kugou.com/v1/album",
+            params=params,
+            content=body_text.encode("utf-8"),
+            headers={
+                "User-Agent": "Android15-1070-11083-46-0-DiscoveryDRADProtocol-wifi",
+                "x-router": "kmr.service.kugou.com",
+                "Content-Type": "application/json",
+                "dfid": "-",
+                "clienttime": str(now_s),
+                "mid": mid,
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("status") != 1:
+            return {}
+        items = payload.get("data")
+        if not isinstance(items, list):
+            return {}
+        item = next(
+            (
+                value
+                for value in items
+                if isinstance(value, dict)
+                and str(value.get("album_id") or "") == album_id
+            ),
+            None,
+        )
+        if not item:
+            return {}
+        return {
+            "release_date": str(item.get("publish_date") or "").strip(),
+            "release_company_raw": str(
+                item.get("publish_company") or ""
+            ).strip(),
+            "release_company_kind": "platform_publish_company",
+            "date_source": "kugou.kmr_album.publish_date",
+            "company_source": "kugou.kmr_album.publish_company",
+        }
+
+    def enrich_candidate(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        """Read the accepted track's official album detail for release metadata."""
+        if self.platform not in {"netease", "qq", "kugou", "kuwo"}:
+            return candidate
+        album_id = str(candidate.get("album_id") or "").strip()
+        if not album_id:
+            return candidate
+        from .go_music_dl_adapter import DEFAULT_SODA_CLIENT, DEFAULT_SODA_HELPER
+
+        if not DEFAULT_SODA_HELPER.is_file():
+            return candidate
+        payload = {
+            "operation": "album_metadata",
+            "platform": self.platform,
+            "album_id": album_id,
+        }
+        environment = os.environ.copy()
+        environment["QISHUI_CLIENT_DIR"] = str(DEFAULT_SODA_CLIENT)
+        completed = subprocess.run(
+            [str(DEFAULT_SODA_HELPER)],
+            input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            timeout=45,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if not completed.stdout:
+            return candidate
+        result = json.loads(completed.stdout.decode("utf-8"))
+        safe_result = {
+            "status": result.get("status"),
+            "album_metadata": result.get("album_metadata"),
+            "error": str(result.get("error") or "")[:500] or None,
+        }
+        encoded = json.dumps(
+            safe_result, ensure_ascii=False, sort_keys=True
+        ).encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()
+        snapshot = self.work_dir / f"album-detail-{album_id}-{digest[:12]}.json"
+        if not snapshot.exists():
+            snapshot.write_bytes(encoded)
+        metadata = result.get("album_metadata")
+        if result.get("status") != "OK" or not isinstance(metadata, dict):
+            return candidate
+        if str(metadata.get("platform") or "") != self.platform:
+            return candidate
+        if str(metadata.get("album_id") or "") != album_id:
+            return candidate
+        if self.platform == "kugou":
+            try:
+                metadata.update(
+                    {
+                        key: value
+                        for key, value in self._fetch_kugou_album_metadata(
+                            album_id
+                        ).items()
+                        if value
+                    }
+                )
+            except Exception:
+                # The older official album detail still supplies a release date.
+                # Company remains unknown when the signed KMR endpoint is unavailable.
+                pass
+        enriched = {**candidate}
+        evidence = list(candidate.get("metadata_evidence") or [])
+        if metadata.get("release_date"):
+            enriched["release_date"] = str(metadata["release_date"])
+            evidence.append(
+                {
+                    "field": "release_date",
+                    "source": str(metadata.get("date_source") or "platform.album_detail"),
+                }
+            )
+        if metadata.get("release_company_raw"):
+            enriched["release_company_raw"] = str(metadata["release_company_raw"])
+            enriched["release_company_kind"] = str(
+                metadata.get("release_company_kind") or "platform_company"
+            )
+            evidence.append(
+                {
+                    "field": "release_company_raw",
+                    "source": str(
+                        metadata.get("company_source") or "platform.album_detail"
+                    ),
+                }
+            )
+        if evidence:
+            # Preserve order while preventing duplicate evidence on exact-ID paths.
+            enriched["metadata_evidence"] = list(
+                {json.dumps(item, sort_keys=True): item for item in evidence}.values()
+            )
+        return enriched
 
     def resolve_platform_id(self, platform_id: str) -> SearchResponse:
         identifier = str(platform_id).strip()

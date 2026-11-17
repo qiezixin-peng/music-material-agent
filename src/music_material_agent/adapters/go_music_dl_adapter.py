@@ -393,6 +393,9 @@ class GoMusicDlAdapter:
             return candidate
         response = self.resolve_platform_id(identifier)
         if not response.candidates:
+            time.sleep(0.5)
+            response = self.resolve_platform_id(identifier)
+        if not response.candidates:
             return candidate
         resolved = response.candidates[0]
         if str(resolved.get("platform_id") or "") != identifier:
