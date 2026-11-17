@@ -28,7 +28,9 @@ SQLite 使用 WAL 模式，保存任务状态、租约、观测、不可变快�
 
 元数据补充不保存 `musicdl.raw_data`。适配器只读取经过审计的平台字段路径，将日期归一化为 `YYYY-MM-DD`，并在 `metadata_evidence` 中记录具体来源路径。搜索层保留网易云 `publishTime`、QQ `time_public`、酷狗 `PublishDate` 等初始证据；匹配完成后再用候选自己的 `album_id` 读取该平台专辑详情。网易云、QQ、酷我读取专辑 `publish_time` 与 `company`；酷狗读取签名 KMR 专辑响应的 `publish_date` 与 `publish_company`，旧专辑接口作为日期降级来源。QQ 搜索采用 `musicdl` 构造并签名的官方加密端点；若下载解析失败，搜索元数据仍以 `metadata_only` 候选保留。内联歌词通过独立 MCP 工具写入 UTF-8 文件，留痕仅含完整性元数据。
 
-稳定对象链接是 observation 的正式字段，不藏在原始响应里。网易云使用数字 ID 路由，QQ 使用当前 `ryqq_v2` MID 路由，酷我使用数字详情路由；酷狗网页歌曲和专辑分别必须有响应中的 `EMixSongID`、`EAlbumID` 才生成链接，文件 Hash 仅用于歌曲 API 身份，不能拼成网页地址。汽水 helper 从官方 track 响应保留歌曲、专辑和全部歌手 ID，并输出 Web 分享页或客户端深链。最终 XLSX 同步导出这些字段。
+稳定对象链接是 observation 的正式字段，不藏在原始响应里。网易云使用数字 ID 路由，QQ 使用当前 `ryqq_v2` MID 路由，酷我使用数字详情路由；酷狗网页歌曲和专辑分别必须有响应中的 `EMixSongID`、`EAlbumID` 才生成链接，文件 Hash 仅用于歌曲 API 身份，不能拼成网页地址。汽水 helper 从官方 track 响应保留歌曲、专辑和全部歌手 ID，再由 `GetShareInfo` 取得真实分享链接。最终 XLSX 同步导出这些字段。
+
+汽水对象 ID 只用于调用官方接口，不直接充当对外链接。桌面客户端的复制操作调用 `GetShareInfo` (`/luna/pc/share_info`) 并复制 `share_info.share_link_desc`；适配器因此保存响应中的 `system_share_link` 与短分享链接，同时保存脱敏响应快照。短链输入先跟随平台重定向到 `music.douyin.com/qishui/share/{track|album|artist}`，再从明确的查询字段恢复对象类型和 ID。
 
 汽水搜索卡片不包含完整发行信息。匹配候选确定后，适配器以歌曲返回的 `album_id` 读取官方专辑详情，提取 `release_date` 与客户端页脚中的 `©`/`℗` 权利主体，分别保存为 `release_date`、`release_company_raw`、`release_company_kind`，并写入 `metadata_evidence`。权利主体和唱片厂牌在语义上不强行等同。
 

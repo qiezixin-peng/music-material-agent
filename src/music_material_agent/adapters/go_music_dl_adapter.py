@@ -18,6 +18,7 @@ import httpx
 from .base import SearchRequest, SearchResponse
 from .musicdl_enrichment import normalize_release_date
 from .platform_links import add_platform_links
+from .soda_share import get_soda_share_links
 from ..media import inspect_media_file
 from ..paths import ProjectPaths
 from ..searching.planner import split_artists
@@ -423,6 +424,43 @@ class GoMusicDlAdapter:
         ):
             if resolved.get(field) not in (None, "", []):
                 merged[field] = resolved[field]
+        try:
+            share = get_soda_share_links("track", identifier, self.work_dir / "share")
+            merged["song_url"] = share["system_share_url"]
+            merged["song_short_share_url"] = share["short_share_url"]
+            merged["song_copied_share_text"] = share["copied_share_text"]
+            evidence = list(merged.get("metadata_evidence") or [])
+            evidence.append({"field": "song_url", "source": share["source"]})
+            merged["metadata_evidence"] = evidence
+            if share.get("evidence"):
+                merged["share_evidence"] = [share["evidence"]]
+            album_id = str(merged.get("album_id") or "").strip()
+            if album_id:
+                album_share = get_soda_share_links("album", album_id, self.work_dir / "share")
+                merged["album_url"] = album_share["system_share_url"]
+                merged["album_short_share_url"] = album_share["short_share_url"]
+                merged["album_copied_share_text"] = album_share["copied_share_text"]
+                evidence.append({"field": "album_url", "source": album_share["source"]})
+                if album_share.get("evidence"):
+                    merged.setdefault("share_evidence", []).append(album_share["evidence"])
+            artist_urls: list[str] = []
+            artist_short_urls: list[str] = []
+            artist_share_texts: list[str] = []
+            for artist_id in merged.get("artist_ids") or []:
+                artist_share = get_soda_share_links("artist", str(artist_id), self.work_dir / "share")
+                artist_urls.append(artist_share["system_share_url"])
+                artist_short_urls.append(artist_share["short_share_url"])
+                artist_share_texts.append(artist_share["copied_share_text"])
+                if artist_share.get("evidence"):
+                    merged.setdefault("share_evidence", []).append(artist_share["evidence"])
+            if artist_urls:
+                merged["artist_homepage_url"] = artist_urls[0]
+                merged["artist_homepage_urls"] = artist_urls
+                merged["artist_short_share_urls"] = artist_short_urls
+                merged["artist_copied_share_texts"] = artist_share_texts
+                evidence.append({"field": "artist_homepage_urls", "source": "soda.GetShareInfo.share_info"})
+        except Exception as error:
+            merged["share_link_error"] = f"{type(error).__name__}: {error}"[:500]
         return merged
 
     def resolve_platform_id(self, platform_id: str) -> SearchResponse:

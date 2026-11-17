@@ -47,6 +47,7 @@
 - `collect_music_url(url)`：歌手主页、歌曲页、专辑页的统一入口。
 - 歌曲页会先按平台 ID 调用原生详情解析；专辑页统一返回名称、封面、简介、曲目数、发行日期/主体和关联歌手；歌手页统一返回名称、头像、简介及平台实际提供的歌曲数、专辑数、MV 数、关注数等字段。缺失字段保持缺失，不跨平台猜填。
 - 汽水公开 Web 有歌曲/专辑分享页；歌手主页是桌面客户端原生路由 `luna://luna.com/artist/<id>`，详情直接复用客户端 `GetArtistDetail` 的 `/luna/pc/artists/:id` 官方协议。
+- 汽水对外链接不再由数字 ID 拼接。项目调用桌面客户端“复制链接”使用的 `GetShareInfo`，正式保存 `system_share_link` 和 `qishui.douyin.com/s/...` 短链；歌曲、专辑、音乐人短链也能作为 `collect_music_url` 的输入并还原平台 ID。
 
 ## 开发运行
 

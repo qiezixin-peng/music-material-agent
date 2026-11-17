@@ -13,6 +13,7 @@ from .adapters.musicdl_adapter import MusicDlAdapter
 from .adapters.platform_links import identify_music_url
 from .adapters.platform_links import add_platform_links
 from .adapters.scrapling_evidence import ScraplingEvidenceCollector
+from .adapters.soda_share import get_soda_share_links, resolve_soda_short_link
 from .adapters.entity_metadata import (
     collect_artist_metadata,
     enrich_album_artist_ids,
@@ -22,18 +23,28 @@ from .adapters.entity_metadata import (
 
 def collect_music_url(url: str, trace_dir: str | Path) -> dict[str, Any]:
     """Collect one supported song, album or artist URL with an auditable trace."""
-    identity = identify_music_url(url)
     trace = Path(trace_dir).resolve()
     trace.mkdir(parents=True, exist_ok=True)
+    requested_url = str(url).strip()
+    resolved_input_url = requested_url
+    if re.fullmatch(r"https?://qishui\.douyin\.com/s/[A-Za-z0-9_-]+/?", requested_url):
+        resolved_input_url = resolve_soda_short_link(requested_url)
+    identity = identify_music_url(resolved_input_url)
     platform = str(identity["platform"])
     entity_type = str(identity["entity_type"])
     identifier = str(identity["platform_id"])
     result: dict[str, Any] = {
         **identity,
+        "input_url": requested_url,
         "status": "IDENTIFIED",
         "authoritative_identity": True,
         "evidence": [],
     }
+    if resolved_input_url != requested_url:
+        result["resolved_input_url"] = resolved_input_url
+        result["evidence"].append(
+            {"kind": "official_short_link_redirect", "url": requested_url, "resolved_url": resolved_input_url}
+        )
 
     # Song identifiers supported by the native adapters are resolved first.
     # The original URL is still fetched below, so encoded share routes (notably
@@ -98,13 +109,13 @@ def collect_music_url(url: str, trace_dir: str | Path) -> dict[str, Any]:
         except Exception as error:
             result["native_error"] = f"{type(error).__name__}: {error}"[:500]
 
-    if str(url).casefold().startswith(("http://", "https://")):
+    if str(resolved_input_url).casefold().startswith(("http://", "https://")):
         try:
             page = None
             last_error: Exception | None = None
             for attempt in range(2):
                 try:
-                    page = ScraplingEvidenceCollector(trace / "page").inspect(url)
+                    page = ScraplingEvidenceCollector(trace / "page").inspect(resolved_input_url)
                     break
                 except Exception as error:
                     last_error = error
@@ -147,6 +158,22 @@ def collect_music_url(url: str, trace_dir: str | Path) -> dict[str, Any]:
                     result["evidence"].extend(album_evidence)
                 except Exception as error:
                     result["album_artist_error"] = f"{type(error).__name__}: {error}"[:500]
+            if platform == "soda" and entity_type in {"song", "album", "artist"}:
+                try:
+                    share_type = "track" if entity_type == "song" else entity_type
+                    share = get_soda_share_links(share_type, identifier, trace / "share")
+                    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+                    field = {"song": "song_url", "album": "album_url", "artist": "artist_homepage_url"}[entity_type]
+                    data[field] = share["system_share_url"]
+                    data[f"{entity_type}_short_share_url"] = share["short_share_url"]
+                    data[f"{entity_type}_copied_share_text"] = share["copied_share_text"]
+                    if entity_type == "artist":
+                        data["artist_homepage_urls"] = [share["system_share_url"]]
+                    result["data"] = data
+                    if share.get("evidence"):
+                        result["evidence"].append(share["evidence"])
+                except Exception as error:
+                    result["share_link_error"] = f"{type(error).__name__}: {error}"[:500]
             result["status"] = "OK"
             if platform == "kugou" and entity_type == "song":
                 html_text = Path(page["snapshot_path"]).read_text(
@@ -237,6 +264,13 @@ def collect_music_url(url: str, trace_dir: str | Path) -> dict[str, Any]:
                 )
                 result["data"] = artist_data
                 result["evidence"].extend(artist_evidence)
+                share = get_soda_share_links("artist", identifier, trace / "share")
+                result["data"]["artist_homepage_url"] = share["system_share_url"]
+                result["data"]["artist_homepage_urls"] = [share["system_share_url"]]
+                result["data"]["artist_short_share_url"] = share["short_share_url"]
+                result["data"]["artist_copied_share_text"] = share["copied_share_text"]
+                if share.get("evidence"):
+                    result["evidence"].append(share["evidence"])
             except Exception as error:
                 result["native_error"] = f"{type(error).__name__}: {error}"[:500]
         if "data" not in result:
@@ -250,4 +284,21 @@ def collect_music_url(url: str, trace_dir: str | Path) -> dict[str, Any]:
             {"kind": "installed_client_route", "route": "/artist/:id"}
         )
         result["status"] = "OK"
+    if platform == "soda" and isinstance(result.get("data"), dict):
+        data = result["data"]
+        short_field = f"{entity_type}_short_share_url"
+        if not data.get(short_field):
+            try:
+                share_type = "track" if entity_type == "song" else entity_type
+                share = get_soda_share_links(share_type, identifier, trace / "share")
+                field = {"song": "song_url", "album": "album_url", "artist": "artist_homepage_url"}[entity_type]
+                data[field] = share["system_share_url"]
+                data[short_field] = share["short_share_url"]
+                data[f"{entity_type}_copied_share_text"] = share["copied_share_text"]
+                if entity_type == "artist":
+                    data["artist_homepage_urls"] = [share["system_share_url"]]
+                if share.get("evidence"):
+                    result["evidence"].append(share["evidence"])
+            except Exception as error:
+                result["share_link_error"] = f"{type(error).__name__}: {error}"[:500]
     return result

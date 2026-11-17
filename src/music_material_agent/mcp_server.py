@@ -170,7 +170,11 @@ def resolve_soda_track_id(platform_id: str, job_id: str | None = None) -> dict[s
         work_dir = service.paths.trace_dir(job_id) / "raw" / "soda-id-resolve"
     else:
         work_dir = _new_search_runtime() / "soda-id-resolve"
-    return asdict(GoMusicDlAdapter(work_dir).resolve_platform_id(platform_id))
+    adapter = GoMusicDlAdapter(work_dir)
+    response = adapter.resolve_platform_id(platform_id)
+    if response.candidates:
+        response.candidates[0] = adapter.enrich_candidate(response.candidates[0])
+    return asdict(response)
 
 
 @mcp.tool()

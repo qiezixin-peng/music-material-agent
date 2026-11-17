@@ -72,12 +72,8 @@ def add_platform_links(
     artist_urls: list[str] = []
     if platform == "soda":
         artist_ids = _ids([*artist_ids, *str((result.get("backend_ref") or {}).get("extra", {}).get("artist_ids") or "").split(",")])
-        if _NUMERIC_ID.fullmatch(song_id):
-            song_url = f"https://www.qishui.com/track/{song_id}"
-        if _NUMERIC_ID.fullmatch(album_id):
-            album_url = f"https://www.qishui.com/album/{album_id}"
-        # The installed Soda client exposes /artist/:id as its native artist page.
-        artist_urls = [f"luna://luna.com/artist/{value}" for value in artist_ids]
+        # Soda URLs are supplied later by GetShareInfo. Numeric IDs alone are
+        # not enough to claim a real copy/share link.
     elif platform == "netease":
         if _NUMERIC_ID.fullmatch(song_id):
             song_url = f"https://music.163.com/#/song?id={song_id}"
@@ -143,6 +139,19 @@ def identify_music_url(url: str) -> dict[str, Any]:
     fragment_path = parsed.fragment.split("?", 1)[0].rstrip("/")
     query = parse_qs(parsed.query)
     fragment_query = parse_qs(parsed.fragment.split("?", 1)[1]) if "?" in parsed.fragment else {}
+    if host in {"www.qishui.com", "qishui.com", "music.douyin.com"}:
+        share_match = re.fullmatch(r"/(?:qishui/)?share/(track|album|artist)", path)
+        if share_match:
+            share_type = share_match.group(1)
+            key = {"track": "track_id", "album": "album_id", "artist": "artist_id"}[share_type]
+            identifier = str((query.get(key) or [""])[0])
+            if _NUMERIC_ID.fullmatch(identifier):
+                return {
+                    "platform": "soda",
+                    "entity_type": "song" if share_type == "track" else share_type,
+                    "platform_id": identifier,
+                    "input_url": url,
+                }
     patterns: list[tuple[str, str, re.Pattern[str], str]] = [
         ("soda", "song", re.compile(r"/track/([A-Za-z0-9_-]+)$"), path),
         ("soda", "album", re.compile(r"/album/([A-Za-z0-9_-]+)$"), path),

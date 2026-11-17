@@ -10,6 +10,9 @@ from music_material_agent.exporter import FIELDS
     ("url", "platform", "entity_type", "identifier"),
     [
         ("https://www.qishui.com/track/6705003948140398594", "soda", "song", "6705003948140398594"),
+        ("https://www.qishui.com/share/track?track_id=6705003948140398594", "soda", "song", "6705003948140398594"),
+        ("https://music.douyin.com/qishui/share/album?album_id=7573886050625374259", "soda", "album", "7573886050625374259"),
+        ("https://www.qishui.com/share/artist?artist_id=7550575200976701441", "soda", "artist", "7550575200976701441"),
         ("luna://luna.com/artist/12345", "soda", "artist", "12345"),
         ("https://music.163.com/#/album?id=18905", "netease", "album", "18905"),
         ("https://y.qq.com/n/ryqq_v2/singer/002pUZT93gF4Cu", "qq", "artist", "002pUZT93gF4Cu"),
@@ -44,6 +47,20 @@ def test_qq_links_include_song_album_and_all_artists() -> None:
     assert candidate["song_url"].endswith("/songDetail/001yS0N33yPm1B")
     assert candidate["album_url"].endswith("/albumDetail/002qcJuX3lO3EZ")
     assert len(candidate["artist_homepage_urls"]) == 2
+
+
+def test_soda_ids_do_not_invent_share_links() -> None:
+    candidate = add_platform_links(
+        {
+            "platform_id": "7573886050625341491",
+            "album_id": "7573886050625374259",
+            "artist_ids": ["7550575200976701441"],
+        },
+        "soda",
+    )
+    assert "song_url" not in candidate
+    assert "album_url" not in candidate
+    assert "artist_homepage_url" not in candidate
 
 
 def test_kugou_never_invents_web_route_from_file_hash() -> None:
