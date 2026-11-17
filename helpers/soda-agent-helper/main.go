@@ -145,7 +145,10 @@ func normalizeAlbumDate(value string) string {
 		}
 		return time.Unix(number, 0).In(time.FixedZone("UTC+8", 8*60*60)).Format("2006-01-02")
 	}
-	datePattern := regexp.MustCompile(`(?m)(19\d{2}|20\d{2})[-/.年](0?[1-9]|1[0-2])[-/.月](0?[1-9]|[12]\d|3[01])`)
+	// Match two-digit days before the single-digit alternative and require a
+	// boundary. Otherwise a value such as 2020-04-30 is prematurely accepted as
+	// 2020-04-3.
+	datePattern := regexp.MustCompile(`(?m)(19\d{2}|20\d{2})[-/.年](1[0-2]|0?[1-9])[-/.月](3[01]|[12]\d|0?[1-9])(?:日|\b)`)
 	matched := datePattern.FindStringSubmatch(value)
 	if len(matched) != 4 {
 		return ""
