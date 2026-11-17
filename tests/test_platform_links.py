@@ -53,7 +53,7 @@ def test_kugou_never_invents_web_route_from_file_hash() -> None:
         raw_item={"EMixSongID": "j576z7e", "EAlbumID": "kurt9f", "SingerId": [7249]},
     )
     assert candidate["song_url"] == "https://www.kugou.com/mixsong/j576z7e.html"
-    assert candidate["album_url"] == "https://www.kugou.com/album/info/kurt9f/"
+    assert candidate["album_url"] == "https://www.kugou.com/album/973001.html"
     assert "C41E80" not in candidate["song_url"]
     assert candidate["artist_homepage_url"] == "https://m.kugou.com/singer/info/7249"
 

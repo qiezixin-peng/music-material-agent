@@ -13,6 +13,11 @@ from .adapters.musicdl_adapter import MusicDlAdapter
 from .adapters.platform_links import identify_music_url
 from .adapters.platform_links import add_platform_links
 from .adapters.scrapling_evidence import ScraplingEvidenceCollector
+from .adapters.entity_metadata import (
+    collect_artist_metadata,
+    enrich_album_artist_ids,
+    normalize_album_metadata,
+)
 
 
 def collect_music_url(url: str, trace_dir: str | Path) -> dict[str, Any]:
@@ -88,7 +93,7 @@ def collect_music_url(url: str, trace_dir: str | Path) -> dict[str, Any]:
             result["native_resolution"] = native_album
             metadata = native_album.get("album_metadata")
             if native_album.get("status") == "OK" and isinstance(metadata, dict):
-                result["data"] = metadata
+                result["data"] = normalize_album_metadata(platform, identifier, metadata)
                 result["status"] = "OK"
         except Exception as error:
             result["native_error"] = f"{type(error).__name__}: {error}"[:500]
@@ -116,6 +121,32 @@ def collect_music_url(url: str, trace_dir: str | Path) -> dict[str, Any]:
                     "snapshot_path": page["snapshot_path"],
                 }
             )
+            if entity_type == "artist":
+                try:
+                    artist_data, artist_evidence = collect_artist_metadata(
+                        platform,
+                        identifier,
+                        trace / "entity",
+                        page_snapshot=page.get("snapshot_path"),
+                    )
+                    result["data"] = artist_data
+                    result["evidence"].extend(artist_evidence)
+                    result["status"] = "OK"
+                except Exception as error:
+                    result["native_error"] = f"{type(error).__name__}: {error}"[:500]
+            elif entity_type == "album" and isinstance(result.get("data"), dict):
+                try:
+                    album_data, album_evidence = enrich_album_artist_ids(
+                        platform,
+                        identifier,
+                        result["data"],
+                        trace / "entity",
+                        page_snapshot=page.get("snapshot_path"),
+                    )
+                    result["data"] = album_data
+                    result["evidence"].extend(album_evidence)
+                except Exception as error:
+                    result["album_artist_error"] = f"{type(error).__name__}: {error}"[:500]
             result["status"] = "OK"
             if platform == "kugou" and entity_type == "song":
                 html_text = Path(page["snapshot_path"]).read_text(
@@ -199,12 +230,22 @@ def collect_music_url(url: str, trace_dir: str | Path) -> dict[str, Any]:
     else:
         # Soda's artist homepage is a native-client route. Its identity comes
         # from the installed client's router, not from an invented public URL.
-        result["data"] = {
-            "platform": platform,
-            "entity_type": entity_type,
-            "platform_id": identifier,
-            "native_url": url,
-        }
+        if entity_type == "artist":
+            try:
+                artist_data, artist_evidence = collect_artist_metadata(
+                    platform, identifier, trace / "entity"
+                )
+                result["data"] = artist_data
+                result["evidence"].extend(artist_evidence)
+            except Exception as error:
+                result["native_error"] = f"{type(error).__name__}: {error}"[:500]
+        if "data" not in result:
+            result["data"] = {
+                "platform": platform,
+                "entity_type": entity_type,
+                "platform_id": identifier,
+                "native_url": url,
+            }
         result["evidence"].append(
             {"kind": "installed_client_route", "route": "/artist/:id"}
         )

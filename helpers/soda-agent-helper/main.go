@@ -71,14 +71,21 @@ type response struct {
 }
 
 type albumMetadata struct {
-	Platform           string `json:"platform"`
-	AlbumID            string `json:"album_id"`
-	AlbumName          string `json:"album_name,omitempty"`
-	ReleaseDate        string `json:"release_date,omitempty"`
-	ReleaseCompanyRaw  string `json:"release_company_raw,omitempty"`
-	ReleaseCompanyKind string `json:"release_company_kind,omitempty"`
-	DateSource         string `json:"date_source,omitempty"`
-	CompanySource      string `json:"company_source,omitempty"`
+	Platform           string   `json:"platform"`
+	AlbumID            string   `json:"album_id"`
+	AlbumName          string   `json:"album_name,omitempty"`
+	CoverURL           string   `json:"cover_url,omitempty"`
+	DescriptionRaw     string   `json:"description_raw,omitempty"`
+	TrackCount         int      `json:"track_count,omitempty"`
+	PlayCount          int      `json:"play_count,omitempty"`
+	CreatorRaw         string   `json:"creator_raw,omitempty"`
+	ArtistIDs          []string `json:"artist_ids,omitempty"`
+	CanonicalURL       string   `json:"canonical_url,omitempty"`
+	ReleaseDate        string   `json:"release_date,omitempty"`
+	ReleaseCompanyRaw  string   `json:"release_company_raw,omitempty"`
+	ReleaseCompanyKind string   `json:"release_company_kind,omitempty"`
+	DateSource         string   `json:"date_source,omitempty"`
+	CompanySource      string   `json:"company_source,omitempty"`
 }
 
 var (
@@ -137,18 +144,19 @@ func resolveAlbumMetadata(platform string, albumID string) response {
 		return response{Status: "INVALID_REQUEST", Error: "album_id is required"}
 	}
 	var album *model.Playlist
+	var songs []model.Song
 	var err error
 	switch platform {
 	case "soda":
-		album, _, err = soda.New("").ParseAlbum("https://www.qishui.com/album/" + albumID)
+		album, songs, err = soda.New("").ParseAlbum("https://www.qishui.com/album/" + albumID)
 	case "netease":
-		album, _, err = netease.ParseAlbum("https://music.163.com/#/album?id=" + albumID)
+		album, songs, err = netease.ParseAlbum("https://music.163.com/#/album?id=" + albumID)
 	case "qq":
-		album, _, err = qq.ParseAlbum("https://y.qq.com/n/ryqq/albumDetail/" + albumID)
+		album, songs, err = qq.ParseAlbum("https://y.qq.com/n/ryqq/albumDetail/" + albumID)
 	case "kugou":
-		album, _, err = kugou.ParseAlbum("https://www.kugou.com/album/" + albumID + ".html")
+		album, songs, err = kugou.ParseAlbum("https://www.kugou.com/album/" + albumID + ".html")
 	case "kuwo":
-		album, _, err = kuwo.ParseAlbum("https://www.kuwo.cn/album_detail/" + albumID)
+		album, songs, err = kuwo.ParseAlbum("https://www.kuwo.cn/album_detail/" + albumID)
 	default:
 		return response{Status: "INVALID_REQUEST", Error: "unsupported album platform"}
 	}
@@ -159,10 +167,34 @@ func resolveAlbumMetadata(platform string, albumID string) response {
 		return response{Status: "ALBUM_METADATA_UNAVAILABLE", Error: "platform returned no album metadata"}
 	}
 	extra := album.Extra
-	date := normalizeAlbumDate(extra["publish_time"])
+	artistIDs := splitIDs(extra["artist_ids"])
+	for _, song := range songs {
+		for _, key := range []string{"artist_ids", "artist_id", "author_id", "singer_id"} {
+			artistIDs = appendUnique(artistIDs, splitIDs(song.Extra[key])...)
+		}
+	}
+	dateValue := strings.TrimSpace(extra["publish_time"])
+	if dateValue == "" {
+		dateValue = strings.TrimSpace(extra["release_date"])
+	}
+	date := normalizeAlbumDate(dateValue)
 	company := strings.TrimSpace(extra["company"])
+	companyKind := "platform_company"
+	if company == "" && platform == "soda" {
+		description := strings.TrimSpace(album.Description)
+		if marker := strings.LastIndex(description, "©"); marker >= 0 {
+			company = strings.TrimSpace(description[marker+len("©"):])
+			companyKind = "copyright_notice"
+		} else if marker := strings.LastIndex(description, "℗"); marker >= 0 {
+			company = strings.TrimSpace(description[marker+len("℗"):])
+			companyKind = "phonographic_copyright_notice"
+		}
+	}
 	metadata := &albumMetadata{
 		Platform: platform, AlbumID: albumID, AlbumName: strings.TrimSpace(album.Name),
+		CoverURL: strings.TrimSpace(album.Cover), DescriptionRaw: strings.TrimSpace(album.Description),
+		TrackCount: album.TrackCount, PlayCount: album.PlayCount,
+		CreatorRaw: strings.TrimSpace(album.Creator), ArtistIDs: artistIDs, CanonicalURL: strings.TrimSpace(album.Link),
 		ReleaseDate: date,
 	}
 	if date != "" {
@@ -170,10 +202,28 @@ func resolveAlbumMetadata(platform string, albumID string) response {
 	}
 	if company != "" {
 		metadata.ReleaseCompanyRaw = company
-		metadata.ReleaseCompanyKind = "platform_company"
+		metadata.ReleaseCompanyKind = companyKind
 		metadata.CompanySource = platform + ".album_detail.company"
 	}
 	return response{Status: "OK", AlbumMetadata: metadata}
+}
+
+func appendUnique(values []string, candidates ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(candidates))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, value := range candidates {
+		if value = strings.TrimSpace(value); value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }
 
 func search(client *soda.Soda, query string) response {

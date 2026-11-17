@@ -95,7 +95,11 @@ def add_platform_links(
         encoded_album = str(item.get("EAlbumID") or item.get("ealbumid") or item.get("encode_album_id") or "").strip()
         if _SAFE_ID.fullmatch(mix_id):
             song_url = f"https://www.kugou.com/mixsong/{mix_id}.html"
-        if _SAFE_ID.fullmatch(encoded_album):
+        # Keep the numeric route as the canonical agent hand-off: music-lib and
+        # Kugou's detail APIs can resolve it without reversing EAlbumID.
+        if _NUMERIC_ID.fullmatch(album_id):
+            album_url = f"https://www.kugou.com/album/{album_id}.html"
+        elif _SAFE_ID.fullmatch(encoded_album):
             album_url = f"https://www.kugou.com/album/info/{encoded_album}/"
         # Kugou's mobile numeric route performs the platform-owned redirect to
         # the opaque current web singer ID (which cannot be guessed from AuthorId).

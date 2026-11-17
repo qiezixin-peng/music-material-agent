@@ -20,7 +20,7 @@ SQLite 使用 WAL 模式，保存任务状态、租约、观测、不可变快�
 
 可信度按来源分层：平台原生响应/页面是事实来源；`musicdl 2.14.2` 是五平台主干候选与下载后端；`soda-agent-helper` 是汽水的无界面签名搜索和下载补强，不提供 Web UI 或监听端口；Scrapling 是页面结构变化时的自适应证据层；Gandalf 只提供候选关系。跨平台匹配由标题、艺人、专辑、时长和版本词共同评分，不能仅靠名称相等。
 
-单对象入口与表格任务共用同一可信度边界。`collect_music_url` 先把 URL 解析为 `(platform, entity_type, platform_id)`；歌曲优先走原生 ID 详情，专辑优先走原生专辑详情，原始 HTTP 页面再由 Scrapling 保存响应、最终 URL、哈希与结构化元数据。歌手页至少保留平台 ID 与页面快照；汽水歌手页使用已安装桌面客户端实际注册的 `luna://luna.com/artist/<id>` 路由，因为该平台没有等价的公开 Web 歌手页。
+单对象入口与表格任务共用同一可信度边界。`collect_music_url` 先把 URL 解析为 `(platform, entity_type, platform_id)`；歌曲优先走原生 ID 详情，专辑优先走原生专辑详情，原始 HTTP 页面再由 Scrapling 保存响应、最终 URL、哈希与结构化元数据。歌手详情分别使用网易云 artist API、QQ `SingerInfoInter.GetSingerDetail`、酷狗签名 `/kmr/v3/author`、酷我 `window.__NUXT__.singerInfo` 和汽水客户端 `GetArtistDetail`；每次调用另存脱敏结构化快照。
 
 当输入含平台 ID 时，协调器跳过模糊关键词并优先执行平台官方精确回查；汽水 SID、网易云歌曲 ID、QQ MID、酷狗 Hash 和酷我歌曲 ID 均已有真实官方回查链路。Gandalf 只在原生候选低于置信度门槛时产生待验证 ID；这些 ID 必须经官方回查后才能进入候选，Gandalf 名称仅作为 `anchor_evidence` 留痕。汽水关键词接口当前每个查询变体只扫描第一页，因此始终保持 `exhaustive=false` 并写入分页限制警告。
 

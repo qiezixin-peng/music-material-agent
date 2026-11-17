@@ -338,10 +338,26 @@ func parseSodaTrackV2Response(body []byte) (*sodaTrackV2Response, error) {
 
 // fetchPlaylistDetail [内部通用] 获取歌单详情
 func (s *Soda) fetchAlbumDetail(id string) (*model.Playlist, []model.Song, error) {
-	body, err := utils.Get(sodaAlbumLink(id),
-		utils.WithHeader("User-Agent", UserAgent),
-		utils.WithHeader("Cookie", s.cookie),
-	)
+	// The share server occasionally labels UTF-8 HTML as a legacy Chinese
+	// charset. music-lib's generic text helper then performs a lossy decode.
+	// Read the response bytes directly; the embedded Remix JSON is UTF-8.
+	req, err := http.NewRequest(http.MethodGet, sodaAlbumLink(id), nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("User-Agent", UserAgent)
+	if strings.TrimSpace(s.cookie) != "" {
+		req.Header.Set("Cookie", s.cookie)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, nil, fmt.Errorf("soda album page http status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -371,7 +387,8 @@ func (s *Soda) fetchAlbumDetail(id string) (*model.Playlist, []model.Song, error
 		Description: description,
 		Link:        sodaAlbumLink(info.ID),
 		Extra: map[string]string{
-			"album_id": info.ID,
+			"album_id":   info.ID,
+			"artist_ids": sodaArtistIDs(info.Artists),
 		},
 	}
 	if info.ReleaseDate > 0 {
