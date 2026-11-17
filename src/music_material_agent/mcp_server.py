@@ -36,6 +36,30 @@ def inspect_workbook(path: str, sample_rows: int = 5) -> dict[str, Any]:
 
 
 @mcp.tool()
+def inspect_media_file(path: str, expected_duration_s: float | None = None) -> dict[str, Any]:
+    """Verify signature, hash, audio streams and duration; rejects HTML/error pages renamed as audio."""
+    return service.inspect_media(path, expected_duration_s)
+
+
+@mcp.tool()
+def export_job_xlsx(job_id: str, filename: str | None = None, allow_partial: bool = False) -> dict[str, Any]:
+    """Export source rows, all platform-native observations and full-review verdicts to a formal XLSX."""
+    return service.export_job(job_id, filename=filename, allow_partial=allow_partial)
+
+
+@mcp.tool()
+def download_verified_candidate(job_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
+    """Resolve an opaque go-music-dl candidate, then keep it only after signature and FFprobe verification."""
+    return service.download_candidate(job_id, candidate)
+
+
+@mcp.tool()
+def download_verified_asset(job_id: str, row_id: str, platform: str, kind: str, url: str) -> dict[str, Any]:
+    """Download a cover, artist avatar or lyric into the job output after type validation."""
+    return service.download_asset(job_id, row_id, platform, kind, url)
+
+
+@mcp.tool()
 def expand_search_queries(
     title: str,
     artists: list[str] | str | None = None,
@@ -113,6 +137,22 @@ def inspect_music_page(url: str, job_id: str | None = None) -> dict[str, Any]:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         evidence_dir = service.paths.temp_root / f"音乐网页证据-{stamp}-{uuid4().hex[:8]}"
     return ScraplingEvidenceCollector(evidence_dir).inspect(url)
+
+
+@mcp.tool()
+def gandalf_anchor_health() -> dict[str, Any]:
+    """Check the optional Gandalf anchor without exposing credentials."""
+    from .adapters.gandalf_anchor import GandalfAnchorClient
+
+    return GandalfAnchorClient().health()
+
+
+@mcp.tool()
+def search_gandalf_anchor(query: str, platform: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """Find optional cross-platform anchor candidates; returned names are never authoritative."""
+    from .adapters.gandalf_anchor import GandalfAnchorClient
+
+    return GandalfAnchorClient().search(query, platform=platform, limit=limit)
 
 
 @mcp.tool()

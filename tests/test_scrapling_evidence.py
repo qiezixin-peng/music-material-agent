@@ -12,7 +12,7 @@ def test_scrapling_collects_raw_and_structured_evidence(tmp_path: Path) -> None:
       <title>fallback title</title>
       <meta property="og:title" content="平台原始歌名">
       <meta property="og:image" content="https://img.example/cover.jpg">
-      <script type="application/ld+json">{"@type":"MusicRecording","name":"平台原始歌名"}</script>
+      <script type="application/ld+json">{"@type":"MusicRecording","name":"平台原始歌名","byArtist":{"@type":"MusicGroup","name":"歌手","image":"https://img.example/avatar.jpg"}}</script>
     </head></html>'''.encode("utf-8")
 
     transport = httpx.MockTransport(lambda request: httpx.Response(200, content=html, request=request))
@@ -27,6 +27,7 @@ def test_scrapling_collects_raw_and_structured_evidence(tmp_path: Path) -> None:
     assert result["exhaustive"] is False
     assert result["metadata"]["title_raw"] == "平台原始歌名"
     assert result["metadata"]["json_ld"][0]["@type"] == "MusicRecording"
+    assert result["metadata"]["artist_avatar_urls"] == ["https://img.example/avatar.jpg"]
     assert "secret" not in result["requested_url"]
     assert Path(result["snapshot_path"]).read_bytes() == html
 

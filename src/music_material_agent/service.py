@@ -18,6 +18,8 @@ from .paths import ProjectPaths
 from .traces import append_event, initialize_trace_directory
 from .util import canonical_json, sha256_file, sha256_text, utc_now
 from .workbooks import inspect_workbook_file, iter_workbook_rows
+from .exporter import export_job_workbook
+from .media import inspect_media_file
 
 
 class ConflictError(RuntimeError):
@@ -44,6 +46,62 @@ class MusicMaterialService:
 
     def inspect_workbook(self, path: str, sample_rows: int = 5) -> dict[str, Any]:
         return inspect_workbook_file(path, sample_rows=sample_rows)
+
+    def inspect_media(self, path: str, expected_duration_s: float | None = None) -> dict[str, Any]:
+        return inspect_media_file(path, expected_duration_s=expected_duration_s)
+
+    def export_job(self, job_id: str, *, filename: str | None = None, allow_partial: bool = False) -> dict[str, Any]:
+        safe_name = Path(filename or f"{job_id}-采集结果.xlsx").name
+        if not safe_name.casefold().endswith(".xlsx"):
+            safe_name += ".xlsx"
+        return export_job_workbook(
+            self.database,
+            job_id,
+            self.paths.output_dir(job_id) / safe_name,
+            allow_partial=allow_partial,
+        )
+
+    def download_candidate(self, job_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
+        with self.database.connect() as connection:
+            job = connection.execute("SELECT trace_dir,output_dir FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not job:
+            raise KeyError(job_id)
+        from .adapters.go_music_dl_adapter import GoMusicDlAdapter
+
+        adapter = GoMusicDlAdapter(Path(job["trace_dir"]) / "runtime" / "go-music-dl")
+        try:
+            result = adapter.download(
+                candidate,
+                Path(job["trace_dir"]) / "downloads" / "staging",
+                Path(job["output_dir"]) / "audio" / str(candidate.get("platform") or "unknown"),
+            )
+        finally:
+            if adapter._service:
+                adapter._service.close()
+        with self.database.transaction(immediate=True) as connection:
+            self._event(connection, job_id, "CANDIDATE_DOWNLOAD", {"platform": candidate.get("platform"), "platform_id": candidate.get("platform_id"), "result": result}, actor="agent")
+        return result
+
+    def download_asset(self, job_id: str, row_id: str, platform: str, kind: str, url: str) -> dict[str, Any]:
+        if platform not in PLATFORMS:
+            raise ValueError(f"Unsupported platform: {platform}")
+        with self.database.connect() as connection:
+            job = connection.execute("SELECT trace_dir,output_dir FROM jobs WHERE id=?", (job_id,)).fetchone()
+            row = connection.execute("SELECT 1 FROM job_rows WHERE job_id=? AND row_id=?", (job_id, row_id)).fetchone()
+        if not job or not row:
+            raise KeyError((job_id, row_id))
+        from .assets import download_asset
+
+        result = download_asset(
+            url,
+            Path(job["trace_dir"]) / "downloads" / "assets",
+            Path(job["output_dir"]) / "assets" / platform / kind,
+            row_id,
+            kind,
+        )
+        with self.database.transaction(immediate=True) as connection:
+            self._event(connection, job_id, "ASSET_DOWNLOAD", {"row_id": row_id, "platform": platform, "kind": kind, "result": result}, actor="agent")
+        return result
 
     def _event(
         self,

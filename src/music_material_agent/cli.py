@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 from typing import Any
 
@@ -45,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("job_id")
 
     commands.add_parser("list-jobs", help="List durable jobs.")
+    commands.add_parser("configure-gandalf", help="Store Gandalf login in Windows Credential Manager.")
     return parser
 
 
@@ -65,6 +67,14 @@ def main() -> None:
         return
     if args.command == "serve":
         uvicorn.run("music_material_agent.api:app", host=args.host, port=args.port, reload=False)
+        return
+    if args.command == "configure-gandalf":
+        from .credentials import store_gandalf_credentials
+
+        username = input("Gandalf username: ").strip()
+        password = getpass.getpass("Gandalf password: ")
+        store_gandalf_credentials(username, password)
+        _print({"ok": True, "stored_in": "Windows Credential Manager", "username": username})
         return
     service = MusicMaterialService()
     if args.command == "inspect":

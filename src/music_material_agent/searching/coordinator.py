@@ -163,9 +163,16 @@ def build_default_coordinator(work_dir: str | Path) -> SearchCoordinator:
 
         import musicdl  # noqa: F401
     except ImportError:
-        return coordinator
-    for platform in PLATFORMS:
-        coordinator.register(
-            MusicDlAdapter(platform, work_dir=work_dir / "musicdl" / platform)
-        )
+        pass
+    else:
+        for platform in PLATFORMS:
+            coordinator.register(
+                MusicDlAdapter(platform, work_dir=work_dir / "musicdl" / platform)
+            )
+    try:
+        from ..adapters.go_music_dl_adapter import GoMusicDlAdapter
+
+        coordinator.register(GoMusicDlAdapter(work_dir / "go-music-dl"))
+    except Exception:
+        pass
     return coordinator

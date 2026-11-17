@@ -30,6 +30,26 @@ def _first(values: list[str]) -> str | None:
     return next((value.strip() for value in values if value and value.strip()), None)
 
 
+def _artist_images(value: Any) -> list[str]:
+    found: list[str] = []
+    if isinstance(value, list):
+        for item in value:
+            found.extend(_artist_images(item))
+    elif isinstance(value, dict):
+        entity_type = value.get("@type")
+        types = entity_type if isinstance(entity_type, list) else [entity_type]
+        if any(item in {"Person", "MusicGroup"} for item in types):
+            image = value.get("image")
+            if isinstance(image, str):
+                found.append(image)
+            elif isinstance(image, dict) and isinstance(image.get("url"), str):
+                found.append(image["url"])
+        for key in ("byArtist", "artist", "author", "creator", "@graph"):
+            if key in value:
+                found.extend(_artist_images(value[key]))
+    return list(dict.fromkeys(found))
+
+
 class ScraplingEvidenceCollector:
     """Fetch a known platform page and retain raw, adaptive extraction evidence.
 
@@ -123,5 +143,6 @@ class ScraplingEvidenceCollector:
                 "image_urls": images,
                 "canonical_url": canonical,
                 "json_ld": json_ld,
+                "artist_avatar_urls": list(dict.fromkeys(url for item in json_ld for url in _artist_images(item))),
             },
         }

@@ -4,9 +4,12 @@ import importlib.util
 import shutil
 import sqlite3
 import sys
+from pathlib import Path
 from typing import Any
 
 from .paths import ProjectPaths
+from .media import find_media_binary
+from .credentials import get_gandalf_credentials
 
 
 def run_doctor(paths: ProjectPaths | None = None) -> dict[str, Any]:
@@ -20,7 +23,12 @@ def run_doctor(paths: ProjectPaths | None = None) -> dict[str, Any]:
         "scrapling": importlib.util.find_spec("scrapling") is not None,
         "musicdl": importlib.util.find_spec("musicdl") is not None,
     }
-    binaries = {name: shutil.which(name) for name in ("ffmpeg", "ffprobe", "git", "uv")}
+    binaries = {name: (find_media_binary(name) if name in {"ffmpeg", "ffprobe"} else shutil.which(name)) for name in ("ffmpeg", "ffprobe", "git", "uv")}
+    local_backends = {
+        "go_music_dl": Path(r"D:\三喜\工具\go-music-dl\music-dl.exe").is_file(),
+        "soda_client": Path(r"D:\Soda Music\3.8.0").is_dir(),
+        "gandalf_credentials": get_gandalf_credentials() is not None,
+    }
     database_ok = False
     database_error: str | None = None
     try:
@@ -43,6 +51,7 @@ def run_doctor(paths: ProjectPaths | None = None) -> dict[str, Any]:
         "dependencies": dependencies,
         "optional_adapters": optional,
         "binaries": binaries,
+        "local_backends": local_backends,
         "database": {"ok": database_ok, "error": database_error},
         "warnings": [
             message

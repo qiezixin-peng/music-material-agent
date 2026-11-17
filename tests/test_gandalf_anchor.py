@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+import httpx
+
+from music_material_agent.adapters.gandalf_anchor import GandalfAnchorClient
+from music_material_agent.credentials import Credentials
+
+
+def test_gandalf_is_anchor_only_and_preserves_recorded_name() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth/login":
+            return httpx.Response(200, json={"ok": True})
+        if request.url.path == "/api/songs":
+            return httpx.Response(200, json={"items": [{"id": 1, "platform": "qq", "sid": "q1", "name": "Gandalf记录名", "artist": "歌手"}]})
+        return httpx.Response(200, json={"username": "test"})
+
+    transport = httpx.MockTransport(handler)
+    client = GandalfAnchorClient(
+        credentials_provider=lambda: Credentials("user", "password"),
+        client_factory=lambda **kwargs: httpx.Client(transport=transport, **kwargs),
+    )
+    result = client.search("平台真实名称", platform="qq")
+    assert result["role"] == "anchor_only"
+    assert result["authoritative"] is False
+    assert result["candidates"][0]["recorded_title"] == "Gandalf记录名"
+
+
+def test_gandalf_unconfigured_does_not_break_flow() -> None:
+    client = GandalfAnchorClient(credentials_provider=lambda: None)
+    assert client.search("测试")["status"] == "UNCONFIGURED"
+    assert client.health()["ok"] is False
