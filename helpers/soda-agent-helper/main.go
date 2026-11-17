@@ -42,7 +42,6 @@ type candidate struct {
 	Size     int64             `json:"size,omitempty"`
 	Bitrate  int               `json:"bitrate,omitempty"`
 	Cover    string            `json:"cover,omitempty"`
-	Link     string            `json:"link,omitempty"`
 	Extra    map[string]string `json:"extra,omitempty"`
 	IsVIP    bool              `json:"is_vip,omitempty"`
 }
@@ -114,7 +113,7 @@ func candidateFromSong(song model.Song) candidate {
 	return candidate{
 		ID: song.ID, Name: song.Name, Artist: song.Artist, Album: song.Album,
 		AlbumID: song.AlbumID, Duration: song.Duration, Size: song.Size,
-		Bitrate: song.Bitrate, Cover: song.Cover, Link: song.Link,
+		Bitrate: song.Bitrate, Cover: song.Cover,
 		Extra: song.Extra, IsVIP: song.IsVIP,
 	}
 }

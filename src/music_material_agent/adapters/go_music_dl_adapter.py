@@ -26,6 +26,46 @@ DEFAULT_SODA_CLIENT = Path(r"D:\Soda Music\3.8.0")
 DEFAULT_SODA_HELPER = ProjectPaths.defaults().project_root / "bin" / "soda-agent-helper.exe"
 SODA_PROFILE = Path(os.environ.get("APPDATA", "")) / "SodaMusic"
 GO_MUSIC_DL_ADMIN_SERVICE = "music-material-agent:go-music-dl-admin"
+SODA_EXTRA_ALLOWLIST = {
+    "album_id",
+    "is_vip",
+    "only_vip_download",
+    "only_vip_playable",
+    "track_id",
+    "vip_download_qualities",
+    "vip_play_qualities",
+}
+
+
+def _safe_soda_extra(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): str(item)[:1000]
+        for key, item in value.items()
+        if key in SODA_EXTRA_ALLOWLIST
+        and isinstance(item, (str, int, float, bool))
+        and not str(item).startswith(("http://", "https://"))
+    }
+
+
+def _sanitize_helper_result_for_trace(result: dict[str, Any]) -> dict[str, Any]:
+    sanitized = {
+        key: value
+        for key, value in result.items()
+        if key not in {"desktop_cookie_count", "link", "cookie"}
+    }
+    candidates = []
+    for raw in result.get("candidates") or []:
+        if not isinstance(raw, dict):
+            continue
+        candidates.append(
+            {key: value for key, value in raw.items() if key not in {"link", "cookie"}}
+        )
+        candidates[-1]["extra"] = _safe_soda_extra(raw.get("extra"))
+    if candidates:
+        sanitized["candidates"] = candidates
+    return sanitized
 
 
 def read_soda_client_cookie() -> tuple[str, int]:
@@ -253,9 +293,7 @@ class GoMusicDlAdapter:
             result = self._run_soda_helper(
                 {"operation": "search", "query": request.query}, timeout=60
             )
-            trace_result = {
-                key: value for key, value in result.items() if key != "desktop_cookie_count"
-            }
+            trace_result = _sanitize_helper_result_for_trace(result)
             encoded = json.dumps(trace_result, ensure_ascii=False, sort_keys=True).encode("utf-8")
             digest = __import__("hashlib").sha256(encoded).hexdigest()
             snapshot = self.work_dir / f"soda-helper-search-{digest[:16]}.json"
@@ -322,7 +360,7 @@ class GoMusicDlAdapter:
             "backend_ref": {
                 "source": "soda",
                 "id": str(item.get("id") or ""),
-                "extra": item.get("extra") or {},
+                "extra": _safe_soda_extra(item.get("extra")),
             },
         }
 
@@ -332,9 +370,7 @@ class GoMusicDlAdapter:
             result = self._run_soda_helper(
                 {"operation": "resolve", "song": {"id": identifier}}, timeout=60
             )
-            trace_result = {
-                key: value for key, value in result.items() if key != "desktop_cookie_count"
-            }
+            trace_result = _sanitize_helper_result_for_trace(result)
             encoded = json.dumps(trace_result, ensure_ascii=False, sort_keys=True).encode("utf-8")
             digest = __import__("hashlib").sha256(encoded).hexdigest()
             snapshot = self.work_dir / f"soda-helper-resolve-{identifier}-{digest[:12]}.json"

@@ -68,7 +68,11 @@ def test_soda_helper_search_maps_candidates_without_cookie_trace(tmp_path: Path,
                 "artist": "歌手甲 / 歌手乙",
                 "album": "平台专辑",
                 "duration": 180,
-                "extra": {"track_id": "soda-1"},
+                "extra": {
+                    "track_id": "soda-1",
+                    "unsafe_url": "https://temporary.invalid/from-extra",
+                },
+                "link": "https://temporary.invalid/audio",
             }
         ],
     }
@@ -87,6 +91,8 @@ def test_soda_helper_search_maps_candidates_without_cookie_trace(tmp_path: Path,
     trace = Path(response.raw_trace_path).read_text(encoding="utf-8")
     assert "sessionid" not in trace
     assert "secret" not in trace
+    assert "temporary.invalid" not in trace
+    assert response.candidates[0]["backend_ref"]["extra"] == {"track_id": "soda-1"}
 
 
 def test_soda_helper_resolves_platform_id_through_official_metadata(tmp_path: Path, monkeypatch) -> None:
