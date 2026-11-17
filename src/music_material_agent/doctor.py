@@ -10,6 +10,7 @@ from typing import Any
 from .paths import ProjectPaths
 from .media import find_media_binary
 from .credentials import get_gandalf_credentials
+from .adapters.go_music_dl_adapter import read_soda_client_cookie
 
 
 def run_doctor(paths: ProjectPaths | None = None) -> dict[str, Any]:
@@ -27,6 +28,7 @@ def run_doctor(paths: ProjectPaths | None = None) -> dict[str, Any]:
     local_backends = {
         "go_music_dl": Path(r"D:\三喜\工具\go-music-dl\music-dl.exe").is_file(),
         "soda_client": Path(r"D:\Soda Music\3.8.0").is_dir(),
+        "soda_desktop_cookie_count": read_soda_client_cookie()[1],
         "gandalf_credentials": get_gandalf_credentials() is not None,
     }
     database_ok = False

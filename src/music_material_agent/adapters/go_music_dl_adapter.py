@@ -7,6 +7,7 @@ import socket
 import subprocess
 import time
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -14,21 +15,49 @@ from urllib.parse import urljoin
 import httpx
 
 from .base import SearchRequest, SearchResponse
-from ..searching.planner import split_artists
 from ..media import inspect_media_file
+from ..paths import ProjectPaths
+from ..searching.planner import split_artists
 
 
 DEFAULT_EXE = Path(r"D:\三喜\工具\go-music-dl\music-dl.exe")
 DEFAULT_SODA_CLIENT = Path(r"D:\Soda Music\3.8.0")
+SODA_PROFILE = Path(os.environ.get("APPDATA", "")) / "SodaMusic"
+GO_MUSIC_DL_ADMIN_SERVICE = "music-material-agent:go-music-dl-admin"
+
+
+def read_soda_client_cookie() -> tuple[str, int]:
+    """Read the logged-in desktop client's Chromium cookie jar without exposing values."""
+    database = SODA_PROFILE / "Network" / "Cookies"
+    if not database.is_file():
+        return "", 0
+    try:
+        connection = sqlite3.connect(f"file:{database.as_posix()}?mode=ro", uri=True, timeout=5)
+        try:
+            rows = connection.execute(
+                """SELECT name,value FROM cookies
+                   WHERE (host_key='.qishui.com' OR host_key LIKE '%.qishui.com'
+                          OR host_key='.bytedance.com' OR host_key LIKE '%.bytedance.com')
+                     AND value<>''
+                   ORDER BY name, host_key, path"""
+            ).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        # The desktop client may briefly hold a write lock. A later backend start
+        # will retry; no cookie content or database error is written to a trace.
+        return "", 0
+    return "; ".join(f"{name}={value}" for name, value in rows), len(rows)
 
 
 class GoMusicDlService:
-    def __init__(self, work_dir: str | Path, executable: str | Path = DEFAULT_EXE, soda_client_dir: str | Path = DEFAULT_SODA_CLIENT) -> None:
-        self.work_dir = Path(work_dir).resolve()
+    def __init__(self, state_dir: str | Path, executable: str | Path = DEFAULT_EXE, soda_client_dir: str | Path = DEFAULT_SODA_CLIENT) -> None:
+        self.work_dir = Path(state_dir).resolve()
         self.executable = Path(executable).resolve()
         self.soda_client_dir = Path(soda_client_dir).resolve()
         self.process: subprocess.Popen[bytes] | None = None
         self.base_url: str | None = None
+        self.client_cookie_count = 0
         atexit.register(self.close)
 
     def start(self) -> str:
@@ -56,12 +85,39 @@ class GoMusicDlService:
                 raise RuntimeError("go-music-dl exited during startup")
             try:
                 if httpx.get(self.base_url, timeout=1).status_code == 200:
+                    self._sync_soda_client_cookie()
                     return self.base_url
             except httpx.HTTPError:
                 pass
             time.sleep(0.1)
         self.close()
         raise TimeoutError("go-music-dl startup timed out")
+
+    def _sync_soda_client_cookie(self) -> None:
+        cookie, count = read_soda_client_cookie()
+        if not cookie:
+            return
+        try:
+            import keyring
+
+            username = keyring.get_password(GO_MUSIC_DL_ADMIN_SERVICE, "__username__")
+            password = keyring.get_password(GO_MUSIC_DL_ADMIN_SERVICE, username) if username else None
+            if not username or not password or not self.base_url:
+                return
+            with httpx.Client(base_url=self.base_url, follow_redirects=True, timeout=20) as client:
+                login = client.post("login", data={"username": username, "password": password, "next": "/music"})
+                login.raise_for_status()
+                if login.url.path.rstrip("/").endswith("/login"):
+                    return
+                saved = client.post("cookies", json={"soda": cookie}, headers={"Accept": "application/json"})
+                saved.raise_for_status()
+                if "json" not in saved.headers.get("content-type", "").casefold():
+                    return
+            self.client_cookie_count = count
+        except Exception:
+            # Search remains available through public endpoints. The adapter will
+            # still classify an empty response as non-exhaustive.
+            self.client_cookie_count = 0
 
     def close(self) -> None:
         if self.process and self.process.poll() is None:
@@ -77,11 +133,12 @@ class GoMusicDlAdapter:
     name = "go-music-dl"
     platform = "soda"
 
-    def __init__(self, work_dir: str | Path, *, base_url: str | None = None) -> None:
+    def __init__(self, work_dir: str | Path, *, base_url: str | None = None, state_dir: str | Path | None = None) -> None:
         self.work_dir = Path(work_dir).resolve()
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self._base_url = base_url
-        self._service = None if base_url else GoMusicDlService(self.work_dir / "service")
+        persistent_state = Path(state_dir).resolve() if state_dir else ProjectPaths.defaults().data_root / "go-music-dl"
+        self._service = None if base_url else GoMusicDlService(persistent_state)
 
     def health(self) -> dict[str, Any]:
         return {
@@ -91,6 +148,8 @@ class GoMusicDlAdapter:
             "executable": str(DEFAULT_EXE),
             "soda_client_dir": str(DEFAULT_SODA_CLIENT),
             "local_signer_candidate": DEFAULT_SODA_CLIENT.is_dir(),
+            "desktop_cookie_count": read_soda_client_cookie()[1],
+            "cookie_sync_policy": "desktop_client_on_start",
         }
 
     def search(self, request: SearchRequest) -> SearchResponse:

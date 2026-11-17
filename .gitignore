@@ -8,7 +8,6 @@ htmlcov/
 build/
 dist/
 *.egg-info/
-data/*.sqlite*
-data/runtime/
+data/
 outputs/
 *.log
