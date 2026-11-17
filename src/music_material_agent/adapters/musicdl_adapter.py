@@ -132,6 +132,95 @@ def _qq_metadata_candidate(item: dict[str, Any]) -> dict[str, Any]:
     return candidate
 
 
+def _official_search_metadata_candidate(
+    item: dict[str, Any], platform: str
+) -> dict[str, Any]:
+    """Convert official search payloads without resolving temporary audio links."""
+    if platform == "netease":
+        identifier = str(item.get("id") or "")
+        title = item.get("name")
+        artists_data = item.get("ar") if isinstance(item.get("ar"), list) else []
+        artists = [
+            str(artist.get("name"))
+            for artist in artists_data
+            if isinstance(artist, dict) and artist.get("name")
+        ]
+        artists_raw = ", ".join(artists)
+        album = item.get("al") if isinstance(item.get("al"), dict) else {}
+        album_raw = album.get("name")
+        duration_s = float(item.get("dt") or 0) / 1000 or None
+        cover_url = album.get("picUrl")
+    elif platform == "kugou":
+        identifier = str(
+            item.get("FileHash") or item.get("hash") or item.get("HQFileHash") or ""
+        ).upper()
+        title = (
+            item.get("SongName")
+            or item.get("songname")
+            or item.get("songname_original")
+            or item.get("OriSongName")
+        )
+        artists_raw = item.get("SingerName") or item.get("singername")
+        artists = split_artists(artists_raw)
+        album_raw = item.get("AlbumName") or item.get("album_name")
+        duration_s = item.get("Duration") or item.get("duration")
+        cover_url = (
+            (item.get("trans_param") or {}).get("union_cover")
+            if isinstance(item.get("trans_param"), dict)
+            else None
+        ) or item.get("Image") or item.get("cover_url")
+        if isinstance(cover_url, str):
+            cover_url = cover_url.replace("{size}", "400")
+    elif platform == "kuwo":
+        identifier = str(
+            item.get("MUSICRID")
+            or item.get("musicrid")
+            or item.get("DC_TARGETID")
+            or item.get("id")
+            or ""
+        ).removeprefix("MUSIC_")
+        title = item.get("SONGNAME") or item.get("songName") or item.get("name")
+        artists_raw = item.get("ARTIST") or item.get("artist") or item.get("artistName")
+        artists = split_artists(artists_raw)
+        album_raw = item.get("ALBUM") or item.get("album") or item.get("albumName")
+        duration_s = item.get("DURATION") or item.get("duration")
+        cover_url = (
+            item.get("web_albumpic_short")
+            or item.get("web_artistpic_short")
+            or item.get("pic")
+        )
+        if isinstance(cover_url, str) and cover_url.startswith("//"):
+            cover_url = f"https:{cover_url}"
+    else:
+        raise ValueError(f"Unsupported official search platform: {platform}")
+    candidate: dict[str, Any] = {
+        "platform": platform,
+        "backend": "musicdl",
+        "platform_id": identifier,
+        "title_raw": title,
+        "artists_raw": artists_raw,
+        "artists": artists,
+        "album_raw": album_raw,
+        "duration_s": duration_s,
+        "duration": None,
+        "cover_url": cover_url,
+        "lyric": None,
+        "audio": {
+            "available": False,
+            "ext": None,
+            "file_size_bytes": None,
+            "bitrate": None,
+            "codec": None,
+            "samplerate": None,
+            "channels": None,
+        },
+        "root_source": "official_search_metadata",
+        "metadata_only": True,
+    }
+    candidate.update(extract_musicdl_enrichment({"search": item}, platform))
+    return candidate
+
+
 def _detail_metadata_candidate(
     item: dict[str, Any], platform: str, identifier: str
 ) -> dict[str, Any]:
@@ -288,7 +377,7 @@ class MusicDlAdapter:
             client = self._get_client()
             source = getattr(client, "music_clients", {}).get(self.client_name)
             if source is None:
-                raise RuntimeError("QQ musicdl source client is unavailable")
+                raise RuntimeError(f"{self.client_name} musicdl source client is unavailable")
             item = source._getsongmetainfo(identifier)
             if not isinstance(item, dict) or not item:
                 return SearchResponse(
@@ -334,10 +423,68 @@ class MusicDlAdapter:
                 error=sanitized,
             )
 
+    def _search_official_metadata(self, source: Any, query: str) -> list[dict[str, Any]]:
+        """Use musicdl's platform request construction but skip audio URL parsing."""
+        search_meta = source._constructsearchurls(query)[0]
+        timeout = (5, 20)
+        if self.platform == "qq":
+            source.use_encrypted_endpoint = True
+            search_meta = dict(search_meta)
+            search_url = search_meta.pop("url")
+            search_meta.pop("page_no", None)
+            response = source.post(search_url, timeout=timeout, **search_meta)
+            response.raise_for_status()
+            module = response.json().get(
+                "music.search.SearchCgiService.DoSearchForQQMusicMobile", {}
+            )
+            if module.get("code") != 0:
+                raise RuntimeError(f"QQ official search code={module.get('code')}")
+            items = module.get("data", {}).get("body", {}).get("item_song", [])
+            return [
+                _qq_metadata_candidate(item)
+                for item in items
+                if isinstance(item, dict) and (item.get("mid") or item.get("songmid"))
+            ]
+        if self.platform == "netease":
+            search_meta = dict(search_meta)
+            search_url = search_meta.pop("url")
+            search_meta.pop("page", None)
+            response = source.post(search_url, timeout=timeout, **search_meta)
+            response.raise_for_status()
+            items = response.json().get("result", {}).get("songs", [])
+        elif self.platform == "kugou":
+            response = source.get(search_meta, timeout=timeout)
+            response.raise_for_status()
+            items = response.json().get("data", {}).get("lists", [])
+        elif self.platform == "kuwo":
+            response = source.get(search_meta, timeout=timeout)
+            response.raise_for_status()
+            items = response.json().get("abslist", [])
+        else:
+            raise NotImplementedError(self.platform)
+        return [
+            _official_search_metadata_candidate(item, self.platform)
+            for item in items
+            if isinstance(item, dict)
+        ]
+
     def search(self, request: SearchRequest) -> SearchResponse:
         try:
             client = self._get_client()
             captured_errors: list[str] = []
+            if self.platform in {"netease", "qq", "kugou", "kuwo"}:
+                source = getattr(client, "music_clients", {}).get(self.client_name)
+                if source is not None:
+                    candidates = self._search_official_metadata(source, request.query)
+                    return SearchResponse(
+                        backend=self.name,
+                        platform=self.platform,
+                        query=request.query,
+                        status="OK",
+                        candidates=candidates,
+                        pages_scanned=1,
+                        exhaustive=False,
+                    )
             loggers = [getattr(client, "logger_handle", None)]
             loggers.extend(
                 getattr(source_client, "logger_handle", None)
