@@ -268,7 +268,7 @@ class GoMusicDlAdapter:
                 f"{DEFAULT_SODA_HELPER}; run scripts/build_soda_helper.ps1"
             )
         cookie, count = read_soda_client_cookie()
-        if not cookie:
+        if not cookie and str(payload.get("operation") or "") == "download":
             raise RuntimeError("Soda desktop authentication is unavailable")
         request_payload = {**payload, "cookie": cookie}
         environment = os.environ.copy()
@@ -360,6 +360,8 @@ class GoMusicDlAdapter:
             "album_id": item.get("album_id"),
             "duration_s": float(item.get("duration") or 0) or None,
             "cover_url": item.get("cover"),
+            "song_cover_url": item.get("cover"),
+            "album_cover_url": item.get("cover"),
             "is_vip": bool(item.get("is_vip")),
             "backend_ref": {
                 "source": "soda",
@@ -421,6 +423,9 @@ class GoMusicDlAdapter:
             "artist_ids",
             "artist_homepage_url",
             "artist_homepage_urls",
+            "cover_url",
+            "song_cover_url",
+            "album_cover_url",
         ):
             if resolved.get(field) not in (None, "", []):
                 merged[field] = resolved[field]
@@ -461,6 +466,40 @@ class GoMusicDlAdapter:
                 evidence.append({"field": "artist_homepage_urls", "source": "soda.GetShareInfo.share_info"})
         except Exception as error:
             merged["share_link_error"] = f"{type(error).__name__}: {error}"[:500]
+        try:
+            lyric_result = self._run_soda_helper(
+                {"operation": "lyric", "song": {"id": identifier}}, timeout=45
+            )
+            timed = str(lyric_result.get("lyric") or "").strip()
+            if lyric_result.get("status") == "OK" and timed:
+                from ..lyrics import detect_lyric_language, plain_lyric
+
+                merged.update(
+                    {
+                        "lyric": timed,
+                        "lyric_timed": timed,
+                        "lyric_plain": plain_lyric(timed),
+                        "lyric_source": "soda.seo_track.lyric.content",
+                        **detect_lyric_language(timed),
+                    }
+                )
+        except Exception as error:
+            merged["lyric_error"] = f"{type(error).__name__}: {error}"[:500]
+        try:
+            from .artist_images import enrich_primary_artist_images
+
+            artist_images = enrich_primary_artist_images(
+                "soda", list(merged.get("artist_ids") or []), self.work_dir / "artist-detail"
+            )
+            merged.update({key: value for key, value in artist_images.items() if value})
+        except Exception as error:
+            merged["artist_image_error"] = f"{type(error).__name__}: {error}"[:500]
+        company = str(merged.get("release_company_raw") or "").strip()
+        company_kind = str(merged.get("release_company_kind") or "")
+        if company and company_kind in {"platform_company", "platform_publish_company", "label"}:
+            merged["release_label"] = company
+        elif company and "copyright" in company_kind:
+            merged["rights_holder_raw"] = company
         return merged
 
     def resolve_platform_id(self, platform_id: str) -> SearchResponse:

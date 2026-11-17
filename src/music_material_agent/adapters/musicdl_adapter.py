@@ -205,6 +205,8 @@ def _official_search_metadata_candidate(
         )
         if isinstance(cover_url, str) and cover_url.startswith("//"):
             cover_url = f"https:{cover_url}"
+        if isinstance(cover_url, str) and re.fullmatch(r"\d+/[A-Za-z0-9/_-]+\.jpe?g", cover_url.strip()):
+            cover_url = f"https://img1.kuwo.cn/star/albumcover/{cover_url.strip()}"
     else:
         raise ValueError(f"Unsupported official search platform: {platform}")
     candidate: dict[str, Any] = {
@@ -218,7 +220,7 @@ def _official_search_metadata_candidate(
         "album_id": album_id or None,
         "duration_s": duration_s,
         "duration": None,
-        "cover_url": cover_url,
+        "cover_url": str(cover_url).replace("http://", "https://") if cover_url else None,
         "lyric": None,
         "audio": {
             "available": False,
@@ -280,6 +282,8 @@ def _detail_metadata_candidate(
         album_id = str(item.get("albumId") or item.get("albumid") or "")
         duration_s = item.get("duration")
         cover_url = item.get("pic") or item.get("pic120")
+        if isinstance(cover_url, str) and re.fullmatch(r"\d+/[A-Za-z0-9/_-]+\.jpe?g", cover_url.strip()):
+            cover_url = f"https://img1.kuwo.cn/star/albumcover/{cover_url.strip()}"
     else:
         raise ValueError(f"Unsupported detail platform: {platform}")
     candidate: dict[str, Any] = {
@@ -293,7 +297,7 @@ def _detail_metadata_candidate(
         "album_id": album_id or None,
         "duration_s": duration_s,
         "duration": None,
-        "cover_url": cover_url,
+        "cover_url": str(cover_url).replace("http://", "https://") if cover_url else None,
         "lyric": None,
         "audio": {
             "available": False,
@@ -473,13 +477,35 @@ class MusicDlAdapter:
         """Read the accepted track's official album detail for release metadata."""
         if self.platform not in {"netease", "qq", "kugou", "kuwo"}:
             return candidate
+        enriched = {**candidate}
+        identifier = str(candidate.get("platform_id") or "").strip()
+        if identifier:
+            try:
+                from ..lyrics import fetch_platform_lyric
+
+                enriched.update(fetch_platform_lyric(self.platform, identifier))
+            except Exception as error:
+                enriched["lyric_error"] = f"{type(error).__name__}: {error}"[:500]
+        cover = candidate.get("cover_url")
+        if cover:
+            enriched.setdefault("song_cover_url", cover)
+            enriched.setdefault("album_cover_url", cover)
+        try:
+            from .artist_images import enrich_primary_artist_images
+
+            artist_images = enrich_primary_artist_images(
+                self.platform, list(candidate.get("artist_ids") or []), self.work_dir / "artist-detail"
+            )
+            enriched.update({key: value for key, value in artist_images.items() if value})
+        except Exception as error:
+            enriched["artist_image_error"] = f"{type(error).__name__}: {error}"[:500]
         album_id = str(candidate.get("album_id") or "").strip()
         if not album_id:
-            return candidate
+            return enriched
         from .go_music_dl_adapter import DEFAULT_SODA_CLIENT, DEFAULT_SODA_HELPER
 
         if not DEFAULT_SODA_HELPER.is_file():
-            return candidate
+            return enriched
         payload = {
             "operation": "album_metadata",
             "platform": self.platform,
@@ -498,7 +524,7 @@ class MusicDlAdapter:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if not completed.stdout:
-            return candidate
+            return enriched
         result = json.loads(completed.stdout.decode("utf-8"))
         safe_result = {
             "status": result.get("status"),
@@ -514,11 +540,11 @@ class MusicDlAdapter:
             snapshot.write_bytes(encoded)
         metadata = result.get("album_metadata")
         if result.get("status") != "OK" or not isinstance(metadata, dict):
-            return candidate
+            return enriched
         if str(metadata.get("platform") or "") != self.platform:
-            return candidate
+            return enriched
         if str(metadata.get("album_id") or "") != album_id:
-            return candidate
+            return enriched
         if self.platform == "kugou":
             try:
                 metadata.update(
@@ -534,8 +560,9 @@ class MusicDlAdapter:
                 # The older official album detail still supplies a release date.
                 # Company remains unknown when the signed KMR endpoint is unavailable.
                 pass
-        enriched = {**candidate}
         evidence = list(candidate.get("metadata_evidence") or [])
+        if metadata.get("cover_url"):
+            enriched["album_cover_url"] = str(metadata["cover_url"]).replace("http://", "https://")
         if metadata.get("release_date"):
             enriched["release_date"] = str(metadata["release_date"])
             evidence.append(
@@ -549,6 +576,10 @@ class MusicDlAdapter:
             enriched["release_company_kind"] = str(
                 metadata.get("release_company_kind") or "platform_company"
             )
+            if enriched["release_company_kind"] in {"platform_company", "platform_publish_company", "label"}:
+                enriched["release_label"] = enriched["release_company_raw"]
+            elif "copyright" in enriched["release_company_kind"]:
+                enriched["rights_holder_raw"] = enriched["release_company_raw"]
             evidence.append(
                 {
                     "field": "release_company_raw",

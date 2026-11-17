@@ -11,6 +11,8 @@ OBSERVATION_TERMINAL_STATUSES: frozenset[str] = frozenset(
         "AUTH_REQUIRED",
         "RATE_LIMITED",
         "SEARCH_PARTIAL",
+        "NO_CONFIDENT_MATCH",
+        "INSUFFICIENT_TARGET",
     }
 )
 

@@ -24,7 +24,9 @@ SQLite 使用 WAL 模式，保存任务状态、租约、观测、不可变快�
 
 当输入含平台 ID 时，协调器跳过模糊关键词并优先执行平台官方精确回查；汽水 SID、网易云歌曲 ID、QQ MID、酷狗 Hash 和酷我歌曲 ID 均已有真实官方回查链路。Gandalf 只在原生候选低于置信度门槛时产生待验证 ID；这些 ID 必须经官方回查后才能进入候选，Gandalf 名称仅作为 `anchor_evidence` 留痕。汽水关键词接口当前每个查询变体只扫描第一页，因此始终保持 `exhaustive=false` 并写入分页限制警告。
 
-下载采用两阶段提交：后端引用解析出的短期地址不进入任务日志，内容先写临时 staging；文件签名、SHA-256、FFprobe 音频流和时长通过后才原子移动到正式输出。封面、头像和歌词使用独立的类型与大小验证。
+下载采用两阶段提交：后端引用解析出的短期地址不进入任务日志，内容先写临时 staging；文件签名、SHA-256、FFprobe 音频流和时长通过后才原子移动到正式输出。歌曲封面、专辑封面、歌手头像、时间戳歌词、纯文本歌词和音频是彼此独立的物料类型，不以一张封面或一份歌词互相代替。
+
+图片选择不信任 URL 中声称的尺寸。下载器会生成平台允许的高清候选，实际解码每张图片，按真实像素面积选取最高分辨率版本，再应用可选的最小尺寸或精确尺寸约束。歌词先保留平台原始时间轴，再从歌词行移除时间标签生成纯文本；语言识别只分析歌词正文的 Unicode 脚本分布，结果连同方法和置信度进入 observation 与最终表格。
 
 元数据补充不保存 `musicdl.raw_data`。适配器只读取经过审计的平台字段路径，将日期归一化为 `YYYY-MM-DD`，并在 `metadata_evidence` 中记录具体来源路径。搜索层保留网易云 `publishTime`、QQ `time_public`、酷狗 `PublishDate` 等初始证据；匹配完成后再用候选自己的 `album_id` 读取该平台专辑详情。网易云、QQ、酷我读取专辑 `publish_time` 与 `company`；酷狗读取签名 KMR 专辑响应的 `publish_date` 与 `publish_company`，旧专辑接口作为日期降级来源。QQ 搜索采用 `musicdl` 构造并签名的官方加密端点；若下载解析失败，搜索元数据仍以 `metadata_only` 候选保留。内联歌词通过独立 MCP 工具写入 UTF-8 文件，留痕仅含完整性元数据。
 
@@ -38,6 +40,6 @@ SQLite 使用 WAL 模式，保存任务状态、租约、观测、不可变快�
 
 `NO_CONFIDENT_MATCH` 表示平台原生搜索成功，但返回项均未通过证据门槛；它不是“平台已穷尽不存在”。`SEARCH_PARTIAL` 专用于接口错误、限流或非穷尽空响应，并在持久 Worker 冻结前自动退避重试。
 
-状态机把“事实不存在”和“技术上没拿到”分开。`AUTH_REQUIRED`、`RATE_LIMITED`、`SEARCH_UNAVAILABLE`、`SEARCH_PARTIAL`、`FOUND_CANDIDATES` 均不能降级为 `NOT_FOUND_EXHAUSTIVE`。
+状态机把“事实不存在”“输入不足”和“技术上没拿到”分开。`INSUFFICIENT_TARGET` 表示当前表格条件不足以唯一确定一首歌；`AUTH_REQUIRED`、`RATE_LIMITED`、`SEARCH_UNAVAILABLE`、`SEARCH_PARTIAL`、`FOUND_CANDIDATES` 均不能降级为 `NOT_FOUND_EXHAUSTIVE`。
 
 音频自动化遵守无 UI 约束：汽水通过 headless helper 下载；网易云、QQ、酷狗、酷我通过 `musicdl` 的 Python 后端在单一进程内重新取得精确 ID 的短期音频引用，直接写入 staging。项目不调用 `musicdl` 旧 Web 服务，也不保存其包含短期 URL 的下载结果 pickle；文件必须通过签名、FFprobe、时长和 SHA-256 验证后才进入正式目录。

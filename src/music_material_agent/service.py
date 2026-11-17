@@ -217,7 +217,41 @@ class MusicMaterialService:
             self._event(connection, job_id, "ASSET_DOWNLOAD", {"row_id": row_id, "platform": platform, "kind": kind, "result": result}, actor="agent")
         return result
 
-    def save_lyric(self, job_id: str, row_id: str, platform: str, lyric: str) -> dict[str, Any]:
+    def download_best_image(
+        self,
+        job_id: str,
+        row_id: str,
+        platform: str,
+        kind: str,
+        urls: str | list[str],
+        *,
+        min_width: int | None = None,
+        min_height: int | None = None,
+        exact_width: int | None = None,
+        exact_height: int | None = None,
+        resize_mode: str = "cover",
+    ) -> dict[str, Any]:
+        if platform not in PLATFORMS or kind not in {"song_cover", "album_cover", "avatar"}:
+            raise ValueError("Unsupported platform or image kind")
+        with self.database.connect() as connection:
+            job = connection.execute("SELECT trace_dir,output_dir FROM jobs WHERE id=?", (job_id,)).fetchone()
+            row = connection.execute("SELECT 1 FROM job_rows WHERE job_id=? AND row_id=?", (job_id, row_id)).fetchone()
+        if not job or not row:
+            raise KeyError((job_id, row_id))
+        from .assets import download_best_image
+
+        result = download_best_image(
+            urls, platform,
+            Path(job["trace_dir"]) / "downloads" / "assets",
+            Path(job["output_dir"]) / "assets" / platform / kind,
+            row_id, kind, min_width=min_width, min_height=min_height,
+            exact_width=exact_width, exact_height=exact_height, resize_mode=resize_mode,
+        )
+        with self.database.transaction(immediate=True) as connection:
+            self._event(connection, job_id, "BEST_IMAGE_SELECTED", {"row_id": row_id, "platform": platform, "kind": kind, "result": result}, actor="agent")
+        return result
+
+    def save_lyric(self, job_id: str, row_id: str, platform: str, lyric: str, *, kind: str = "lyric") -> dict[str, Any]:
         """Save inline platform lyrics with the same durable audit trail as URL assets."""
         if platform not in PLATFORMS:
             raise ValueError(f"Unsupported platform: {platform}")
@@ -228,11 +262,13 @@ class MusicMaterialService:
             raise KeyError((job_id, row_id))
         from .assets import save_lyric_text
 
+        if kind not in {"lyric", "lyric_timed", "lyric_plain"}:
+            raise ValueError(f"Unsupported lyric kind: {kind}")
         result = save_lyric_text(
             lyric,
             Path(job["trace_dir"]) / "downloads" / "assets",
-            Path(job["output_dir"]) / "assets" / platform / "lyric",
-            row_id,
+            Path(job["output_dir"]) / "assets" / platform / kind,
+            f"{row_id}-{kind}",
         )
         with self.database.transaction(immediate=True) as connection:
             self._event(
@@ -259,7 +295,7 @@ class MusicMaterialService:
         *,
         actor: str = "agent",
     ) -> dict[str, Any]:
-        if kind not in {"cover", "avatar", "lyric", "audio"}:
+        if kind not in {"cover", "song_cover", "album_cover", "avatar", "lyric", "lyric_timed", "lyric_plain", "audio"}:
             raise ValueError(f"Unsupported material kind: {kind}")
         now = utc_now()
         metadata = {
@@ -356,7 +392,7 @@ class MusicMaterialService:
     def material_progress(
         self, job_id: str, platform: str, *, kinds: list[str] | None = None
     ) -> dict[str, Any]:
-        selected = kinds or ["cover", "avatar", "lyric"]
+        selected = kinds or ["song_cover", "album_cover", "avatar", "lyric_timed", "lyric_plain"]
         with self.database.connect() as connection:
             total = connection.execute(
                 "SELECT COUNT(*) AS count FROM observations WHERE job_id=? AND platform=?",

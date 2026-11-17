@@ -49,6 +49,7 @@ def download_musicdl_candidate(
     if source is None:
         raise RuntimeError("musicdl source client is unavailable")
     song = None
+    exact_resolution_status: dict[str, Any] | None = None
     detail_resolver = getattr(source, "_getsongmetainfo", None)
     third_party_parser = getattr(source, "_parsewiththirdpartapis", None)
     official_parser = getattr(source, "_parsewithofficialapiv1", None)
@@ -57,6 +58,14 @@ def download_musicdl_candidate(
             detail = detail_resolver(identifier)
             if isinstance(detail, dict) and detail:
                 if platform == "kugou":
+                    song_detail = detail.get("song_detail") if isinstance(detail.get("song_detail"), dict) else {}
+                    if song_detail.get("pay_type") and not song_detail.get("url"):
+                        exact_resolution_status = {
+                            "status": "RIGHTS_RESTRICTED",
+                            "error": "Kugou reports that the exact track requires paid playback rights",
+                            "platform_code": song_detail.get("pay_type"),
+                        }
+                if platform == "kugou":
                     detail.setdefault("hash", identifier)
                 elif platform == "kuwo":
                     detail.setdefault("MUSICRID", f"MUSIC_{identifier}")
@@ -64,7 +73,11 @@ def download_musicdl_candidate(
                     detail.setdefault("id", int(identifier) if identifier.isdigit() else identifier)
                 elif platform == "qq":
                     detail.setdefault("mid", identifier)
-                fallback_song = third_party_parser(search_result=detail)
+                # musicdl 2.14.2 leaves request_overrides=None by default, while
+                # several source parsers dereference it. Pass the documented
+                # empty override explicitly so exact-ID downloads do not fall
+                # through to a title search.
+                fallback_song = third_party_parser(search_result=detail, request_overrides={})
                 song = fallback_song
                 if callable(official_parser):
                     try:
@@ -72,6 +85,7 @@ def download_musicdl_candidate(
                             search_result=detail,
                             song_info_flac=fallback_song,
                             lossless_quality_is_sufficient=True,
+                            request_overrides={},
                         )
                         if getattr(official_song, "with_valid_download_url", False):
                             song = official_song
@@ -94,7 +108,7 @@ def download_musicdl_candidate(
             None,
         )
     if song is None:
-        return {
+        return exact_resolution_status or {
             "status": "AUDIO_REFERENCE_NOT_RESOLVED",
             "error": "musicdl search did not return the exact platform ID",
         }

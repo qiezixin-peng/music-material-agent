@@ -67,6 +67,7 @@ type response struct {
 	AlbumMetadata *albumMetadata `json:"album_metadata,omitempty"`
 	Path          string         `json:"path,omitempty"`
 	Bytes         int64          `json:"bytes,omitempty"`
+	Lyric         string         `json:"lyric,omitempty"`
 	Error         string         `json:"error,omitempty"`
 }
 
@@ -107,6 +108,8 @@ func main() {
 		write(search(client, strings.TrimSpace(req.Query)))
 	case "resolve":
 		write(resolve(client, req.Song))
+	case "lyric":
+		write(lyric(client, req.Song))
 	case "album_metadata":
 		write(resolveAlbumMetadata(strings.TrimSpace(req.Platform), strings.TrimSpace(req.AlbumID)))
 	case "download":
@@ -114,6 +117,21 @@ func main() {
 	default:
 		write(response{Status: "INVALID_REQUEST", Error: "unsupported operation"})
 	}
+}
+
+func lyric(client *soda.Soda, input *songInput) response {
+	if input == nil || strings.TrimSpace(input.ID) == "" {
+		return response{Status: "INVALID_REQUEST", Error: "song id is required"}
+	}
+	song := &model.Song{ID: input.ID, Source: "soda", Extra: input.Extra}
+	value, err := client.GetLyrics(song)
+	if err != nil {
+		return response{Status: "LYRIC_UNAVAILABLE", Error: safeError(err)}
+	}
+	if strings.TrimSpace(value) == "" {
+		return response{Status: "LYRIC_UNAVAILABLE", Error: "Soda returned no lyric"}
+	}
+	return response{Status: "OK", Lyric: value}
 }
 
 func normalizeAlbumDate(value string) string {

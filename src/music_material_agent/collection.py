@@ -14,6 +14,9 @@ TITLE_ALIASES = ("歌曲名", "歌名", "歌曲", "title", "track", "name")
 ARTIST_ALIASES = ("歌手", "歌手名", "艺人", "artist", "artists", "singer")
 ALBUM_ALIASES = ("专辑", "专辑名", "album")
 DURATION_ALIASES = ("时长秒", "时长", "duration_s", "duration", "seconds")
+URL_ALIASES = ("歌曲链接", "歌曲URL", "歌曲网址", "链接", "url", "song_url", "track_url")
+GENERIC_ID_ALIASES = ("songid", "song_id", "歌曲ID", "歌曲id", "曲目ID", "track_id")
+PLATFORM_ALIASES = ("平台", "来源平台", "platform", "source")
 PLATFORM_ID_ALIASES: dict[str, tuple[str, ...]] = {
     "soda": ("汽水SID", "汽水ID", "soda_sid", "soda_id"),
     "netease": ("网易云ID", "网易ID", "netease_id", "163ID"),
@@ -75,6 +78,33 @@ def target_from_row(
         id_map.get(platform),
     )
     target: dict[str, Any] = {}
+    source_url = _value(row, URL_ALIASES, mapping.get("song_url") or mapping.get("url"))
+    if source_url not in (None, ""):
+        try:
+            from .adapters.platform_links import identify_music_url
+
+            identity = identify_music_url(str(source_url).strip())
+            if identity.get("platform") == platform:
+                target["input_url"] = str(source_url).strip()
+                target["input_entity_type"] = identity.get("entity_type")
+                if identity.get("entity_type") == "song":
+                    platform_id = identity.get("platform_id")
+        except (TypeError, ValueError):
+            # Keep the row searchable by its textual conditions and preserve no
+            # unverified identifier from an unrecognised URL.
+            pass
+    if platform_id in (None, ""):
+        generic_id = _value(row, GENERIC_ID_ALIASES, mapping.get("song_id"))
+        platform_hint = _value(row, PLATFORM_ALIASES, mapping.get("platform"))
+        aliases = {
+            "soda": {"soda", "汽水", "汽水音乐"},
+            "netease": {"netease", "163", "网易", "网易云", "网易云音乐"},
+            "qq": {"qq", "qq音乐"},
+            "kugou": {"kugou", "酷狗", "酷狗音乐"},
+            "kuwo": {"kuwo", "酷我", "酷我音乐"},
+        }
+        if generic_id not in (None, "") and str(platform_hint or "").strip().casefold() in aliases[platform]:
+            platform_id = generic_id
     if title not in (None, ""):
         target["title"] = str(title).strip()
     if artists_raw not in (None, ""):
@@ -97,7 +127,7 @@ def _safe_error(error: Exception) -> str:
     return re.sub(r"(https?://[^?\s]+)\?[^\s]+", r"\1?[REDACTED]", message)[:1000]
 
 
-def _observation_data(candidate: dict[str, Any]) -> dict[str, Any]:
+def _observation_data(candidate: dict[str, Any], requested_fields: list[str] | None = None) -> dict[str, Any]:
     allowed = {
         "platform",
         "backend",
@@ -120,9 +150,26 @@ def _observation_data(candidate: dict[str, Any]) -> dict[str, Any]:
         "release_date",
         "release_company_raw",
         "release_company_kind",
+        "release_label",
+        "rights_holder_raw",
         "cover_url",
+        "song_cover_url",
+        "song_cover_urls",
+        "album_cover_url",
+        "album_cover_urls",
         "artist_avatar_url",
+        "artist_avatar_urls",
+        "artist_profile_evidence",
+        "artist_image_error",
         "lyric",
+        "lyric_timed",
+        "lyric_plain",
+        "lyric_source",
+        "lyric_language",
+        "lyric_languages",
+        "lyric_language_confidence",
+        "lyric_language_method",
+        "lyric_error",
         "audio",
         "root_source",
         "metadata_only",
@@ -134,6 +181,11 @@ def _observation_data(candidate: dict[str, Any]) -> dict[str, Any]:
         "metadata_evidence",
         "anchor_evidence",
     }
+    allowed.update(
+        str(field).strip()
+        for field in (requested_fields or [])
+        if isinstance(field, str) and str(field).strip()
+    )
     return {key: value for key, value in candidate.items() if key in allowed}
 
 
@@ -205,12 +257,16 @@ def run_platform_collection(
             target["title"] = f"id:{platform_ids[platform]}"
         if not target.get("title"):
             result = {
-                "status": "SEARCH_PARTIAL",
+                "status": "INSUFFICIENT_TARGET",
                 "queries": [],
                 "attempts": [{
-                    "status": "SEARCH_PARTIAL",
+                    "status": "INSUFFICIENT_TARGET",
                     "exhaustive": False,
-                    "error": "Source row has no mapped title or platform ID",
+                    "error": (
+                        "Source row cannot identify one song: provide a song title, a "
+                        "platform-specific song ID, or a recognised song URL. Artist-only "
+                        "and album-only rows are not silently converted to the first song."
+                    ),
                 }],
                 "candidates": [],
             }
@@ -234,7 +290,8 @@ def run_platform_collection(
                     "candidates": [],
                 }
         candidates = result.get("candidates") or []
-        data = _observation_data(candidates[0]) if candidates else {}
+        requested_fields = spec.get("requested_fields") if isinstance(spec.get("requested_fields"), list) else []
+        data = _observation_data(candidates[0], requested_fields) if candidates else {}
         evidence = {
             "target": target,
             "queries": result.get("queries") or [],

@@ -75,6 +75,21 @@ def test_target_from_common_chinese_workbook_headers() -> None:
     }
 
 
+def test_target_accepts_song_url_as_exact_platform_condition() -> None:
+    target = target_from_row(
+        {"歌曲链接": "https://y.qq.com/n/ryqq_v2/songDetail/000XeLXA3X8CTH"},
+        "qq",
+    )
+    assert target["platform_ids"] == {"qq": "000XeLXA3X8CTH"}
+    assert target["input_entity_type"] == "song"
+
+
+def test_generic_song_id_requires_matching_platform_hint() -> None:
+    row = {"songid": "254574", "平台": "网易云音乐"}
+    assert target_from_row(row, "netease")["platform_ids"] == {"netease": "254574"}
+    assert "platform_ids" not in target_from_row(row, "qq")
+
+
 def test_collection_batch_resumes_records_and_seals(
     service: MusicMaterialService, tmp_path: Path
 ) -> None:
@@ -118,7 +133,7 @@ def test_collection_batch_resumes_records_and_seals(
     assert all("official_platform_id" in row["evidence_json"] for row in rows)
 
 
-def test_collection_records_unmapped_row_as_partial(
+def test_collection_records_unmapped_row_as_insufficient_without_retry_loop(
     service: MusicMaterialService, tmp_path: Path
 ) -> None:
     workbook = Workbook()
@@ -136,16 +151,6 @@ def test_collection_records_unmapped_row_as_partial(
         "kuwo-agent",
         coordinator_factory=lambda *_args, **_kwargs: FakeCoordinator(),
     )
-    assert result["statuses"] == {"SEARCH_PARTIAL": 1}
-    assert result["sealed"] is False
-    assert result["needs_technical_retry"] is True
-
-    sealed = run_platform_collection(
-        service,
-        job["job_id"],
-        "kuwo",
-        "kuwo-agent",
-        seal_with_technical=True,
-        coordinator_factory=lambda *_args, **_kwargs: FakeCoordinator(),
-    )
-    assert sealed["sealed"] is True
+    assert result["statuses"] == {"INSUFFICIENT_TARGET": 1}
+    assert result["sealed"] is True
+    assert result["needs_technical_retry"] is False

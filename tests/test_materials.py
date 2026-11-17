@@ -30,6 +30,8 @@ def test_material_batch_saves_inline_lyric_and_exports_manifest(
             "platform_id": "123",
             "title_raw": "测试歌曲",
             "lyric": "[00:00.00]歌词",
+            "lyric_timed": "[00:00.00]歌词",
+            "lyric_plain": "歌词",
         },
     )
 
@@ -38,13 +40,15 @@ def test_material_batch_saves_inline_lyric_and_exports_manifest(
     )
     assert result["progress"]["complete"] is True
     assert result["processed"][0]["materials"] == {
-        "cover": "NOT_AVAILABLE",
+        "song_cover": "NOT_AVAILABLE",
+        "album_cover": "NOT_AVAILABLE",
         "avatar": "NOT_AVAILABLE",
-        "lyric": "SAVED_VERIFIED",
+        "lyric_timed": "SAVED_VERIFIED",
+        "lyric_plain": "SAVED_VERIFIED",
     }
     with service.database.connect() as connection:
         lyric = connection.execute(
-            "SELECT path,sha256,status FROM materials WHERE job_id=? AND kind='lyric'",
+            "SELECT path,sha256,status FROM materials WHERE job_id=? AND kind='lyric_timed'",
             (job_id,),
         ).fetchone()
     assert lyric["status"] == "SAVED_VERIFIED"
@@ -56,5 +60,5 @@ def test_material_batch_saves_inline_lyric_and_exports_manifest(
     rows = list(output["采集结果"].iter_rows(values_only=True))
     headers = list(rows[0])
     values = dict(zip(headers, rows[1]))
-    assert values["netease.lyric_status"] == "SAVED_VERIFIED"
-    assert values["netease.lyric_path"] == lyric["path"]
+    assert values["netease.lyric_timed_status"] == "SAVED_VERIFIED"
+    assert values["netease.lyric_timed_path"] == lyric["path"]

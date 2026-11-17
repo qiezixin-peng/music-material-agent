@@ -297,8 +297,17 @@ def collect_materials_batch(
     max_rows: int = 10,
     include_audio: bool = False,
     retry_failed: bool = False,
+    image_min_width: int | None = None,
+    image_min_height: int | None = None,
+    image_exact_width: int | None = None,
+    image_exact_height: int | None = None,
+    image_resize_mode: str = "cover",
 ) -> dict[str, Any]:
-    """Persist cover, avatar and lyric assets separately from immutable search snapshots."""
+    """Collect separate song/album covers, avatar, timed/plain lyrics and optional audio.
+
+    Image constraints apply to all three image kinds. Exact dimensions are produced only
+    after downloading and selecting the highest-resolution valid platform candidate.
+    """
     from .materials import run_material_batch
 
     return run_material_batch(
@@ -309,6 +318,11 @@ def collect_materials_batch(
         max_rows=max_rows,
         include_audio=include_audio,
         retry_failed=retry_failed,
+        image_min_width=image_min_width,
+        image_min_height=image_min_height,
+        image_exact_width=image_exact_width,
+        image_exact_height=image_exact_height,
+        image_resize_mode=image_resize_mode,
     )
 
 

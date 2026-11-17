@@ -26,18 +26,21 @@
 - 汽水候选确定后会继续读取官方专辑详情页，保存 `release_date`、`release_company_raw` 和来源类型；客户端显示的 `©`/`℗` 权利主体不会被无依据改写为唱片厂牌。
 - Gandalf 仅在原生结果低于置信度门槛时可选触发，最多提供待验证的平台 ID；每个 ID 必须回到平台官方接口解析成功，其记录名称永不覆盖平台原始字段。
 - 音频先进入临时 staging，经文件签名、SHA-256、FFprobe 音频流和时长验真后才进入正式输出。
-- 封面、头像和歌词下载带类型、大小和 HTML 错误页检查。
+- 歌曲封面、专辑封面和歌手头像是三类独立物料；逐个平台尝试官方高清地址，以真实解码后的像素尺寸选取最清晰版本，并记录宽高、字节数和 SHA-256。可要求最小尺寸或精确尺寸，精确尺寸支持 `cover`、`contain`、`stretch` 三种模式。
+- 五个平台均有原生歌词链路，分别保存带时间戳歌词和去时间戳纯文本；语种由歌词正文的 Unicode 字符分布本地判定，并导出语言、候选语言、置信度和方法，不把曲名或平台标签当歌词分析。
 - `musicdl` 原始响应采用字段白名单提取；候选确定后，五个平台都会按各自 `album_id` 补查平台专辑详情。网易云、QQ、酷狗、酷我保存 `release_date`、`release_company_raw`、`release_company_kind` 与字段来源，汽水保存客户端专辑页脚对应字段。整份响应、签名参数、密钥形字段和短期 URL 不进入任务记录。
 - 酷狗发行主体使用当前 KMR 专辑接口的 `publish_company`，发行日期使用同一响应的 `publish_date`；旧版专辑接口只作为日期降级来源。
 - QQ 使用 `musicdl` 的官方加密搜索端点；即使后续音频解析失败，也会保留官方搜索元数据候选并明确标注 `metadata_only`，不会再把“音频暂不可取”误判为“歌曲不存在”。
-- 原生接口直接返回的歌词文本可由 `save_verified_lyric_text` 验证后原子落盘；事件只记录路径、大小与 SHA-256，不复制整篇歌词。
+- 原生接口返回的歌词文本由 `save_verified_lyric_text` 验证后原子落盘；事件只记录路径、大小与 SHA-256，不复制整篇歌词。汽水歌词由客户端官方协议读取，网易云、QQ、酷狗、酷我分别使用各自平台歌词接口。
 - 最终 XLSX 同时导出源行、五平台原始字段、证据和逐行复核结论。
 - 每个平台观察正式保存并导出 `song_url`、`album_url`、`artist_ids`、`artist_homepage_url(s)`；多人合唱不会只留下第一个歌手。酷狗歌曲只使用响应给出的 `EMixSongID`；专辑和歌手优先保存可被官方接口重新解析的数字路由，不拿文件 Hash 或不透明 Web ID 猜地址。
 - `collect_platform_batch` 将表格映射、原生搜索、逐行留痕、断点续跑和分区冻结串成一个 Agent 批处理；常见中英文列名可自动识别，也支持任务级 `column_map`。
 - 持久 Worker 在冻结分区前会对技术失败自动退避重试；重试后仍失败才以显式技术状态封存，绝不改写成未找到。
 - QQ 官方加密搜索做请求节流，并对临时 `code=2001` 短退避重试；Gandalf 会话按采集进程复用，404 仅表示无锚点。
 - `review_platform_batch` 对分配中的每一行独立重搜，不抽样；只有同平台 ID 复核一致才自动判定通过。
-- `collect_materials_batch` 将封面、头像、歌词及其缺失/失败状态保存到独立物料清单，不修改已冻结搜索快照。
+- `collect_materials_batch` 将歌曲封面、专辑封面、歌手头像、时间戳歌词、纯文本歌词和可选音频及其缺失/失败状态保存到独立物料清单，不修改已冻结搜索快照。图片可传 `image_min_width`、`image_min_height`、`image_exact_width`、`image_exact_height`、`image_resize_mode`。
+- 表格可混用歌曲名、歌手名、专辑名、平台歌曲 ID 和歌曲链接；识别到歌曲链接或与平台提示一致的 ID 时优先精确回查。仅有歌手名或仅有专辑名不足以唯一确定歌曲时返回 `INSUFFICIENT_TARGET`，不会擅自选择搜索结果第一首。
+- 任务规格可通过 `requested_fields` 增加以后出现的采集字段，观察记录和最终 XLSX 会保留这些动态列，不必先修改固定表头。
 - `finalize_job` 严格检查采集、互审和物料覆盖率，随后输出最终 XLSX、SHA-256 与 `final-manifest.json`。
 
 `musicdl 2.14.2` 始终是五平台主干后端；无界面汽水 helper 是针对客户端登录态、PC 签名搜索和音频下载的补强层，Scrapling 负责网页证据。三者的候选统一进入同一评分、留痕和复核流程。任何非穷尽空结果都不会被报告为平台不存在。
@@ -75,7 +78,7 @@ uv run music-material mcp-http --host 127.0.0.1 --port 8766
 
 `start_shared_mcp.ps1` 在隐藏进程中启动同一个 localhost MCP；状态记录在被 Git 忽略的 `data/runtime/shared-mcp.json`，标准输出和错误日志位于 `D:\三喜\临时文件\音乐物料MCP服务-共享`。停止脚本会核对 PID 的实际可执行文件，避免误停其他进程。
 
-物料工具分为两类：`download_verified_asset` 处理封面、头像或远程歌词 URL；`save_verified_lyric_text` 处理 `musicdl` 候选中已经内联返回的歌词。两者都先写 staging，通过验证后才移动到正式任务输出。
+物料底层工具包括：`download_verified_asset` 处理单个远程资源，`download_best_image` 解析并比较多份官方图片候选，`save_verified_lyric_text` 保存平台原生歌词。它们都先写 staging，通过类型、内容及哈希验证后才移动到正式任务输出。常规 Agent 应优先调用批处理工具 `collect_materials_batch`。
 
 推荐 Agent 工作流：`create_job` → 五个 Agent 分别循环调用 `collect_platform_batch` → `create_review_plan` → 各复核 Agent 循环调用 `review_platform_batch` → 各平台调用 `collect_materials_batch` → `finalize_job`。每个批处理都能从数据库断点续跑；默认一批 10 行，长表不需要绑定单个聊天窗口。
 
