@@ -63,6 +63,15 @@ def add_platform_links(
     result = {**candidate}
     item = raw_item or {}
     song_id = str(result.get("platform_id") or "").strip()
+    if song_id:
+        result["song_id"] = song_id
+        result["song_id_type"] = {
+            "soda": "sid",
+            "netease": "numeric_song_id",
+            "qq": "song_mid",
+            "kugou": "file_hash",
+            "kuwo": "music_id",
+        }.get(platform, "platform_song_id")
     album_id = str(result.get("album_id") or "").strip()
     artist_ids = extract_artist_ids(item, platform)
     if result.get("artist_ids"):
@@ -90,6 +99,7 @@ def add_platform_links(
         mix_id = str(item.get("EMixSongID") or item.get("emixsongid") or item.get("encode_album_audio_id") or "").strip()
         encoded_album = str(item.get("EAlbumID") or item.get("ealbumid") or item.get("encode_album_id") or "").strip()
         if _SAFE_ID.fullmatch(mix_id):
+            result["kugou_mix_song_id"] = mix_id
             song_url = f"https://www.kugou.com/mixsong/{mix_id}.html"
         # Keep the numeric route as the canonical agent hand-off: music-lib and
         # Kugou's detail APIs can resolve it without reversing EAlbumID.

@@ -45,6 +45,8 @@ def test_qq_links_include_song_album_and_all_artists() -> None:
         },
     )
     assert candidate["song_url"].endswith("/songDetail/001yS0N33yPm1B")
+    assert candidate["song_id"] == "001yS0N33yPm1B"
+    assert candidate["song_id_type"] == "song_mid"
     assert candidate["album_url"].endswith("/albumDetail/002qcJuX3lO3EZ")
     assert len(candidate["artist_homepage_urls"]) == 2
 
@@ -70,6 +72,9 @@ def test_kugou_never_invents_web_route_from_file_hash() -> None:
         raw_item={"EMixSongID": "j576z7e", "EAlbumID": "kurt9f", "SingerId": [7249]},
     )
     assert candidate["song_url"] == "https://www.kugou.com/mixsong/j576z7e.html"
+    assert candidate["song_id"] == "C41E80A18D1448FA47086372999C7F43"
+    assert candidate["song_id_type"] == "file_hash"
+    assert candidate["kugou_mix_song_id"] == "j576z7e"
     assert candidate["album_url"] == "https://www.kugou.com/album/973001.html"
     assert "C41E80" not in candidate["song_url"]
     assert candidate["artist_homepage_url"] == "https://m.kugou.com/singer/info/7249"
@@ -78,6 +83,9 @@ def test_kugou_never_invents_web_route_from_file_hash() -> None:
 def test_link_fields_are_formal_workbook_columns() -> None:
     assert {
         "song_url",
+        "song_id",
+        "song_id_type",
+        "kugou_mix_song_id",
         "album_url",
         "artist_ids",
         "artist_homepage_url",

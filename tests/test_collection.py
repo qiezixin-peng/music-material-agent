@@ -90,6 +90,11 @@ def test_generic_song_id_requires_matching_platform_hint() -> None:
     assert "platform_ids" not in target_from_row(row, "qq")
 
 
+def test_camel_case_song_id_alias_is_accepted_for_matching_platform() -> None:
+    row = {"SongID": "000XeLXA3X8CTH", "平台": "QQ音乐"}
+    assert target_from_row(row, "qq")["platform_ids"] == {"qq": "000XeLXA3X8CTH"}
+
+
 def test_collection_batch_resumes_records_and_seals(
     service: MusicMaterialService, tmp_path: Path
 ) -> None:

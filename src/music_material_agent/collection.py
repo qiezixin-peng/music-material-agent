@@ -15,7 +15,9 @@ ARTIST_ALIASES = ("歌手", "歌手名", "艺人", "artist", "artists", "singer"
 ALBUM_ALIASES = ("专辑", "专辑名", "album")
 DURATION_ALIASES = ("时长秒", "时长", "duration_s", "duration", "seconds")
 URL_ALIASES = ("歌曲链接", "歌曲URL", "歌曲网址", "链接", "url", "song_url", "track_url")
-GENERIC_ID_ALIASES = ("songid", "song_id", "歌曲ID", "歌曲id", "曲目ID", "track_id")
+GENERIC_ID_ALIASES = (
+    "songid", "SongID", "songId", "song_id", "歌曲ID", "歌曲id", "曲目ID", "track_id"
+)
 PLATFORM_ALIASES = ("平台", "来源平台", "platform", "source")
 PLATFORM_ID_ALIASES: dict[str, tuple[str, ...]] = {
     "soda": ("汽水SID", "汽水ID", "soda_sid", "soda_id"),
@@ -132,6 +134,9 @@ def _observation_data(candidate: dict[str, Any], requested_fields: list[str] | N
         "platform",
         "backend",
         "platform_id",
+        "song_id",
+        "song_id_type",
+        "kugou_mix_song_id",
         "title_raw",
         "artists_raw",
         "artists",

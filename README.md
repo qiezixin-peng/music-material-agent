@@ -34,6 +34,7 @@
 - 原生接口返回的歌词文本由 `save_verified_lyric_text` 验证后原子落盘；事件只记录路径、大小与 SHA-256，不复制整篇歌词。汽水歌词由客户端官方协议读取，网易云、QQ、酷狗、酷我分别使用各自平台歌词接口。
 - 最终 XLSX 同时导出源行、五平台原始字段、证据和逐行复核结论。
 - 每个平台观察正式保存并导出 `song_url`、`album_url`、`artist_ids`、`artist_homepage_url(s)`；多人合唱不会只留下第一个歌手。酷狗歌曲只使用响应给出的 `EMixSongID`；专辑和歌手优先保存可被官方接口重新解析的数字路由，不拿文件 Hash 或不透明 Web ID 猜地址。
+- 每个平台明确导出 `song_id` 与 `song_id_type`：汽水 SID、网易云数字歌曲 ID、QQ Song MID、酷狗文件 Hash、酷我 Music ID。酷狗另存 `kugou_mix_song_id` 作为网页路由标识，避免把 Hash 和 `EMixSongID` 混为同一种 ID。表格输入支持 `songid`、`SongID`、`songId`、`song_id` 及中文歌曲 ID 列名，但通用 ID 只有在平台提示一致时才会用于精确回查。
 - `collect_platform_batch` 将表格映射、原生搜索、逐行留痕、断点续跑和分区冻结串成一个 Agent 批处理；常见中英文列名可自动识别，也支持任务级 `column_map`。
 - 持久 Worker 在冻结分区前会对技术失败自动退避重试；重试后仍失败才以显式技术状态封存，绝不改写成未找到。
 - QQ 官方加密搜索做请求节流，并对临时 `code=2001` 短退避重试；Gandalf 会话按采集进程复用，404 仅表示无锚点。

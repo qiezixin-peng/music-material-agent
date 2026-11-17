@@ -13,6 +13,9 @@ from .database import Database
 FIELDS = (
     "status",
     "platform_id",
+    "song_id",
+    "song_id_type",
+    "kugou_mix_song_id",
     "title_raw",
     "artists_raw",
     "album_raw",
