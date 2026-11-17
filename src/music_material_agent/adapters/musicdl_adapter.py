@@ -71,6 +71,67 @@ def song_info_to_candidate(song: Any, platform: str) -> dict[str, Any]:
     return candidate
 
 
+def _qq_metadata_candidate(item: dict[str, Any]) -> dict[str, Any]:
+    """Preserve official QQ search metadata when audio resolution is unavailable."""
+    singers = item.get("singer") if isinstance(item.get("singer"), list) else []
+    artist_names = [
+        str(singer.get("name"))
+        for singer in singers
+        if isinstance(singer, dict) and singer.get("name")
+    ]
+    album = item.get("album") if isinstance(item.get("album"), dict) else {}
+    album_mid = str(album.get("mid") or "")
+    singer_mid = next(
+        (
+            str(singer.get("mid"))
+            for singer in singers
+            if isinstance(singer, dict) and singer.get("mid")
+        ),
+        "",
+    )
+    candidate: dict[str, Any] = {
+        "platform": "qq",
+        "backend": "musicdl",
+        "platform_id": str(item.get("mid") or item.get("songmid") or ""),
+        "title_raw": item.get("title") or item.get("name"),
+        "artists_raw": ", ".join(artist_names),
+        "artists": artist_names,
+        "album_raw": album.get("title") or item.get("albumname"),
+        "duration_s": item.get("interval"),
+        "duration": None,
+        "cover_url": (
+            f"https://y.gtimg.cn/music/photo_new/T002R800x800M000{album_mid}.jpg"
+            if album_mid
+            else None
+        ),
+        "lyric": None,
+        "audio": {
+            "available": False,
+            "ext": None,
+            "file_size_bytes": None,
+            "bitrate": None,
+            "codec": None,
+            "samplerate": None,
+            "channels": None,
+        },
+        "root_source": "official_search_metadata",
+        "metadata_only": True,
+    }
+    candidate.update(extract_musicdl_enrichment({"search": item}, "qq"))
+    if singer_mid and not candidate.get("artist_avatar_url"):
+        candidate["artist_avatar_url"] = (
+            f"https://y.gtimg.cn/music/photo_new/T001R500x500M000{singer_mid}.jpg"
+        )
+        evidence = candidate.setdefault("metadata_evidence", [])
+        evidence.append(
+            {
+                "field": "artist_avatar_url",
+                "source": "musicdl.official_search.singer.0.mid",
+            }
+        )
+    return candidate
+
+
 class MusicDlAdapter:
     name = "musicdl"
 
@@ -109,6 +170,10 @@ class MusicDlAdapter:
                     "strict_limit_search_size_per_page": False,
                 }
             }
+            if self.platform == "qq":
+                # The encrypted official search endpoint is currently more reliable;
+                # musicdl still owns request construction and signing.
+                config[self.client_name]["use_encrypted_endpoint"] = True
             self._client = self._factory()(
                 music_sources=[self.client_name],
                 init_music_clients_cfg=config,
@@ -174,6 +239,36 @@ class MusicDlAdapter:
                 if isinstance(value, list):
                     items.extend(value)
             candidates = [song_info_to_candidate(item, self.platform) for item in items]
+            if self.platform == "qq" and not candidates:
+                try:
+                    source = getattr(client, "music_clients", {}).get(self.client_name)
+                    if source is None:
+                        raise RuntimeError("QQ musicdl source client is unavailable")
+                    source.use_encrypted_endpoint = True
+                    search_meta = dict(source._constructsearchurls(request.query)[0])
+                    search_url = search_meta.pop("url")
+                    search_meta.pop("page_no", None)
+                    response = source.post(search_url, **search_meta)
+                    response.raise_for_status()
+                    module = response.json().get(
+                        "music.search.SearchCgiService.DoSearchForQQMusicMobile", {}
+                    )
+                    if module.get("code") != 0:
+                        raise RuntimeError(f"QQ official search code={module.get('code')}")
+                    search_items = (
+                        module.get("data", {}).get("body", {}).get("item_song", [])
+                    )
+                    candidates = [
+                        _qq_metadata_candidate(item)
+                        for item in search_items
+                        if isinstance(item, dict) and (item.get("mid") or item.get("songmid"))
+                    ]
+                except Exception as error:
+                    captured_errors.append(
+                        _sanitize_backend_error(
+                            f"QQ metadata fallback: {type(error).__name__}: {error}"
+                        )
+                    )
             warnings = list(dict.fromkeys(captured_errors))
             status = "OK"
             error = None

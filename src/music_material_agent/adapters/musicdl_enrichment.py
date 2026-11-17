@@ -119,6 +119,13 @@ def extract_musicdl_enrichment(raw_data: Any, platform: str) -> dict[str, Any]:
             ),
         )
         avatar = _safe_http_url(value)
+        if not avatar:
+            singer_mid, mid_path = _first(raw_data, (("search", "singer", 0, "mid"),))
+            if isinstance(singer_mid, str) and re.fullmatch(r"[A-Za-z0-9]+", singer_mid):
+                avatar = _safe_http_url(
+                    f"https://y.gtimg.cn/music/photo_new/T001R500x500M000{singer_mid}.jpg"
+                )
+                avatar_path = mid_path
 
     if avatar:
         result["artist_avatar_url"] = avatar

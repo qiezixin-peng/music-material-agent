@@ -22,6 +22,6 @@ SQLite 使用 WAL 模式，保存任务状态、租约、观测、不可变快�
 
 下载采用两阶段提交：后端引用解析出的短期地址不进入任务日志，内容先写临时 staging；文件签名、SHA-256、FFprobe 音频流和时长通过后才原子移动到正式输出。封面、头像和歌词使用独立的类型与大小验证。
 
-元数据补充不保存 `musicdl.raw_data`。适配器只读取经过审计的平台字段路径，将日期归一化为 `YYYY-MM-DD`，并在 `metadata_evidence` 中记录具体来源路径。当前已实测网易云 `publishTime`、酷狗 `PublishDate` 与歌手头像模板、酷我 `web_artistpic_short`；QQ 接口没有真实返回时保持字段为空，不通过猜测补值。内联歌词通过独立 MCP 工具写入 UTF-8 文件，留痕仅含完整性元数据。
+元数据补充不保存 `musicdl.raw_data`。适配器只读取经过审计的平台字段路径，将日期归一化为 `YYYY-MM-DD`，并在 `metadata_evidence` 中记录具体来源路径。当前已实测网易云 `publishTime`、QQ `time_public` 与歌手 MID、酷狗 `PublishDate` 与歌手头像模板、酷我 `web_artistpic_short`。QQ 搜索采用 `musicdl` 构造并签名的官方加密端点；若下载解析失败，搜索元数据仍以 `metadata_only` 候选保留。内联歌词通过独立 MCP 工具写入 UTF-8 文件，留痕仅含完整性元数据。
 
 状态机把“事实不存在”和“技术上没拿到”分开。`AUTH_REQUIRED`、`RATE_LIMITED`、`SEARCH_UNAVAILABLE`、`SEARCH_PARTIAL`、`FOUND_CANDIDATES` 均不能降级为 `NOT_FOUND_EXHAUSTIVE`。

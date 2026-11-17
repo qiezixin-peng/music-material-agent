@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from music_material_agent.adapters.base import SearchRequest
-from music_material_agent.adapters.musicdl_adapter import MusicDlAdapter, song_info_to_candidate
+from music_material_agent.adapters.musicdl_adapter import (
+    MusicDlAdapter,
+    _qq_metadata_candidate,
+    song_info_to_candidate,
+)
 from music_material_agent.adapters.musicdl_enrichment import normalize_release_date
 
 
@@ -87,10 +91,82 @@ def test_musicdl_constructs_reviewed_kuwo_avatar_url() -> None:
     )
 
 
+def test_musicdl_constructs_reviewed_qq_avatar_url() -> None:
+    song = FakeSong(raw_data={
+        "search": {"singer": [{"mid": "002pUZT93gF4Cu", "name": "BEYOND"}]}
+    })
+    candidate = song_info_to_candidate(song, "qq")
+    assert candidate["artist_avatar_url"] == (
+        "https://y.gtimg.cn/music/photo_new/T001R500x500M000002pUZT93gF4Cu.jpg"
+    )
+
+
 def test_release_date_rejects_partial_or_invalid_dates() -> None:
     assert normalize_release_date("1993") is None
     assert normalize_release_date("1993-02-30") is None
     assert normalize_release_date(None) is None
+
+
+def test_qq_official_metadata_candidate_survives_missing_audio() -> None:
+    candidate = _qq_metadata_candidate({
+        "mid": "001yS0N33yPm1B",
+        "title": "海阔天空",
+        "singer": [{"mid": "002pUZT93gF4Cu", "name": "BEYOND"}],
+        "album": {"mid": "002qcJuX3lO3EZ", "title": "乐与怒"},
+        "interval": 324,
+        "time_public": "1993-05-14",
+        "file": {"media_mid": "must-not-be-copied"},
+    })
+    assert candidate["platform_id"] == "001yS0N33yPm1B"
+    assert candidate["release_date"] == "1993-05-14"
+    assert candidate["audio"]["available"] is False
+    assert candidate["metadata_only"] is True
+    assert candidate["artist_avatar_url"].endswith("002pUZT93gF4Cu.jpg")
+    assert "must-not-be-copied" not in repr(candidate)
+
+
+def test_qq_adapter_falls_back_to_official_search_metadata(tmp_path: Path) -> None:
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "music.search.SearchCgiService.DoSearchForQQMusicMobile": {
+                    "code": 0,
+                    "data": {"body": {"item_song": [{
+                        "mid": "qq-mid",
+                        "title": "平台歌名",
+                        "singer": [{"mid": "artist-mid", "name": "歌手"}],
+                        "album": {"mid": "album-mid", "title": "专辑"},
+                        "interval": 180,
+                        "time_public": "2020-01-02",
+                    }]}},
+                }
+            }
+
+    class FakeSource:
+        use_encrypted_endpoint = False
+
+        def _constructsearchurls(self, keyword: str):
+            assert keyword == "测试歌曲"
+            return [{"url": "https://u.y.qq.com/search", "page_no": 1, "data": b"{}"}]
+
+        def post(self, url: str, **kwargs):
+            assert kwargs["data"] == b"{}"
+            return FakeResponse()
+
+    class EmptyQQClient:
+        music_clients = {"QQMusicClient": FakeSource()}
+
+        def search(self, keyword: str):
+            return {"QQMusicClient": []}
+
+    adapter = MusicDlAdapter("qq", work_dir=tmp_path, client_factory=lambda **_: EmptyQQClient())
+    response = adapter.search(SearchRequest(platform="qq", query="测试歌曲"))
+    assert response.status == "OK"
+    assert response.candidates[0]["platform_id"] == "qq-mid"
+    assert response.candidates[0]["release_date"] == "2020-01-02"
 
 
 def test_musicdl_empty_result_is_not_exhaustive(tmp_path: Path) -> None:
