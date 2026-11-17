@@ -119,6 +119,34 @@ class FakeAnchorClient:
         }
 
 
+@dataclass
+class CountingExactAdapter:
+    platform: str = "netease"
+    name: str = "counting-exact"
+    calls: int = 0
+
+    def health(self):
+        return {"ok": True}
+
+    def search(self, request: SearchRequest) -> SearchResponse:
+        self.calls += 1
+        return SearchResponse(
+            backend=self.name,
+            platform=self.platform,
+            query=request.query,
+            status="OK",
+            candidates=[
+                {
+                    "platform_id": "exact-1",
+                    "title_raw": "我们一起灿烂过的那些年",
+                    "artists": ["七哼Qhyung", "李璟崎KevinGee"],
+                }
+            ],
+            pages_scanned=1,
+            exhaustive=False,
+        )
+
+
 def test_coordinator_uses_variants_and_deduplicates_candidates(tmp_path: Path) -> None:
     coordinator = SearchCoordinator(trace_dir=tmp_path / "trace")
     coordinator.register(FakeAdapter())
@@ -137,6 +165,25 @@ def test_coordinator_uses_variants_and_deduplicates_candidates(tmp_path: Path) -
     trace_path = Path(result["trace_path"])
     assert trace_path.exists()
     assert "search_attempt" in trace_path.read_text(encoding="utf-8")
+
+
+def test_coordinator_stops_variants_after_unambiguous_native_match() -> None:
+    adapter = CountingExactAdapter()
+    coordinator = SearchCoordinator()
+    coordinator.register(adapter)
+
+    result = coordinator.search_platform(
+        "netease",
+        {
+            "title": "我们一起灿烂过的那些年",
+            "artists": ["七哼Qhyung", "李璟崎KevinGee"],
+        },
+        max_queries=8,
+    )
+
+    assert adapter.calls == 1
+    assert len(result["attempts"]) == 1
+    assert result["query_expansion"]["status"] == "STOPPED_HIGH_CONFIDENCE"
 
 
 def test_coordinator_without_adapter_reports_unavailable() -> None:

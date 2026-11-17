@@ -45,6 +45,16 @@ def build_parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status", help="Show one job's state.")
     status.add_argument("job_id")
 
+    worker = commands.add_parser(
+        "collect-worker", help="Continuously collect and seal one platform partition."
+    )
+    worker.add_argument("job_id")
+    worker.add_argument("platform")
+    worker.add_argument("--agent-id")
+    worker.add_argument("--batch-size", type=int, default=10)
+    worker.add_argument("--page-limit", type=int, default=5)
+    worker.add_argument("--max-queries", type=int, default=8)
+
     commands.add_parser("list-jobs", help="List durable jobs.")
     commands.add_parser("configure-gandalf", help="Store Gandalf login in Windows Credential Manager.")
     return parser
@@ -90,6 +100,20 @@ def main() -> None:
         )
     elif args.command == "status":
         _print(service.job_status(args.job_id))
+    elif args.command == "collect-worker":
+        from .workers import run_collection_worker
+
+        result = run_collection_worker(
+            service,
+            args.job_id,
+            args.platform,
+            args.agent_id or f"worker-{args.platform}",
+            batch_size=args.batch_size,
+            page_limit=args.page_limit,
+            max_queries=args.max_queries,
+            event_sink=_print,
+        )
+        _print({"event": "worker_complete", **result})
     elif args.command == "list-jobs":
         _print(service.list_jobs())
 

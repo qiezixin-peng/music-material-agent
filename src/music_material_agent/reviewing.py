@@ -119,6 +119,7 @@ def run_review_batch(
             "fresh_attempts": fresh.get("attempts") or [],
             "fresh_candidates": [_candidate_summary(item) for item in candidates[:10]],
             "fresh_trace_path": fresh.get("trace_path"),
+            "query_expansion": fresh.get("query_expansion"),
             "same_platform_id": bool(
                 candidates
                 and row["source_observation"].get("platform_id")

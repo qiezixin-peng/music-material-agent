@@ -76,6 +76,26 @@ class SearchCoordinator:
             return str(target["platform_id"]).strip()
         return ""
 
+    @staticmethod
+    def _is_high_confidence_native_match(
+        target: dict[str, Any], ranked: list[dict[str, Any]]
+    ) -> bool:
+        """Stop query expansion only after native title, artist and version agree.
+
+        The general match score deliberately reserves weight for album and duration,
+        which many search endpoints do not return.  Those absent fields must not force
+        every artist-order variant to run after the platform has already returned an
+        unambiguous native match.
+        """
+        if not ranked or not split_artists(target.get("artists") or target.get("artist")):
+            return False
+        components = ranked[0].get("match_components") or {}
+        return (
+            float(components.get("title") or 0) >= 0.98
+            and float(components.get("artists") or 0) >= 0.95
+            and float(components.get("version") or 0) >= 0.99
+        )
+
     def _resolve_uncertain_anchors(
         self,
         platform: str,
@@ -247,6 +267,7 @@ class SearchCoordinator:
                     if self.trace_dir:
                         result["trace_path"] = str(self.trace_dir / "search-events.jsonl")
                     return result
+        early_stop: dict[str, Any] | None = None
         for adapter in adapters:
             for query in queries:
                 response = adapter.search(
@@ -283,6 +304,26 @@ class SearchCoordinator:
                 for candidate in response.candidates:
                     key = self._candidate_key(candidate)
                     unique_candidates.setdefault(key, candidate)
+                provisional = rank_candidates(target, list(unique_candidates.values()))
+                if self._is_high_confidence_native_match(target, provisional):
+                    early_stop = {
+                        "reason": "native_title_artist_version_match",
+                        "after_query": query["query"],
+                        "queries_run": len(attempts),
+                        "queries_planned": len(queries),
+                    }
+                    self._append_trace(
+                        {
+                            "event": "query_expansion_stopped",
+                            "platform": platform,
+                            "target": target,
+                            "decision": early_stop,
+                            "candidate": provisional[0],
+                        }
+                    )
+                    break
+            if early_stop:
+                break
         ranked = rank_candidates(target, list(unique_candidates.values()))
         anchor_summary = self._resolve_uncertain_anchors(
             platform, target, adapters, ranked, unique_candidates
@@ -296,6 +337,8 @@ class SearchCoordinator:
             "attempts": attempts,
             "candidates": ranked,
         }
+        if early_stop:
+            result["query_expansion"] = {"status": "STOPPED_HIGH_CONFIDENCE", **early_stop}
         if anchor_summary:
             result["anchor"] = anchor_summary
         self._append_trace({"event": "platform_search_complete", "result": result})

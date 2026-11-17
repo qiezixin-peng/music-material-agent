@@ -227,6 +227,7 @@ def run_platform_collection(
             "candidate_summaries": [_candidate_summary(item) for item in candidates[:10]],
             "trace_path": result.get("trace_path"),
             "resolution": result.get("resolution"),
+            "query_expansion": result.get("query_expansion"),
             "anchor": result.get("anchor"),
         }
         service.record_observation(
