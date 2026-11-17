@@ -526,18 +526,6 @@ class MusicDlAdapter:
         if not completed.stdout:
             return enriched
         result = json.loads(completed.stdout.decode("utf-8"))
-        safe_result = {
-            "status": result.get("status"),
-            "album_metadata": result.get("album_metadata"),
-            "error": str(result.get("error") or "")[:500] or None,
-        }
-        encoded = json.dumps(
-            safe_result, ensure_ascii=False, sort_keys=True
-        ).encode("utf-8")
-        digest = hashlib.sha256(encoded).hexdigest()
-        snapshot = self.work_dir / f"album-detail-{album_id}-{digest[:12]}.json"
-        if not snapshot.exists():
-            snapshot.write_bytes(encoded)
         metadata = result.get("album_metadata")
         if result.get("status") != "OK" or not isinstance(metadata, dict):
             return enriched
@@ -560,6 +548,21 @@ class MusicDlAdapter:
                 # The older official album detail still supplies a release date.
                 # Company remains unknown when the signed KMR endpoint is unavailable.
                 pass
+        # Persist the final normalized evidence only after platform-specific
+        # enrichment. In particular, Kugou's authoritative publish_company and
+        # publish_date come from the signed KMR response, not the legacy fallback.
+        safe_result = {
+            "status": result.get("status"),
+            "album_metadata": metadata,
+            "error": str(result.get("error") or "")[:500] or None,
+        }
+        encoded = json.dumps(
+            safe_result, ensure_ascii=False, sort_keys=True
+        ).encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()
+        snapshot = self.work_dir / f"album-detail-{album_id}-{digest[:12]}.json"
+        if not snapshot.exists():
+            snapshot.write_bytes(encoded)
         evidence = list(candidate.get("metadata_evidence") or [])
         if metadata.get("cover_url"):
             enriched["album_cover_url"] = str(metadata["cover_url"]).replace("http://", "https://")

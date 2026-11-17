@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from music_material_agent.adapters.base import SearchRequest
+from music_material_agent.adapters import go_music_dl_adapter as go_music_dl_adapter_module
 from music_material_agent.adapters import musicdl_adapter as musicdl_adapter_module
 from music_material_agent.adapters.musicdl_adapter import (
     MusicDlAdapter,
@@ -328,6 +330,50 @@ def test_kugou_signed_album_metadata_extracts_publish_company(monkeypatch) -> No
     assert result["release_date"] == "1993-05-14"
     assert result["release_company_raw"] == "滚石唱片"
     assert result["company_source"] == "kugou.kmr_album.publish_company"
+
+
+def test_kugou_snapshot_contains_final_kmr_fields(tmp_path: Path, monkeypatch) -> None:
+    helper = tmp_path / "helper.exe"
+    helper.write_bytes(b"stub")
+    monkeypatch.setattr(go_music_dl_adapter_module, "DEFAULT_SODA_HELPER", helper)
+    helper_result = {
+        "status": "OK",
+        "album_metadata": {
+            "platform": "kugou",
+            "album_id": "973001",
+            "release_date": "1993-05-01",
+            "date_source": "kugou.album_detail.publish_time",
+        },
+    }
+    monkeypatch.setattr(
+        musicdl_adapter_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout=json.dumps(helper_result).encode("utf-8"), stderr=b"", returncode=0
+        ),
+    )
+    monkeypatch.setattr(
+        MusicDlAdapter,
+        "_fetch_kugou_album_metadata",
+        staticmethod(
+            lambda album_id: {
+                "release_date": "1993-05-14",
+                "release_company_raw": "滚石唱片",
+                "release_company_kind": "platform_publish_company",
+                "date_source": "kugou.kmr_album.publish_date",
+                "company_source": "kugou.kmr_album.publish_company",
+            }
+        ),
+    )
+
+    enriched = MusicDlAdapter("kugou", work_dir=tmp_path).enrich_candidate(
+        {"album_id": "973001"}
+    )
+    snapshot = json.loads(next(tmp_path.glob("album-detail-*.json")).read_text("utf-8"))
+
+    assert enriched["release_date"] == "1993-05-14"
+    assert snapshot["album_metadata"]["release_company_raw"] == "滚石唱片"
+    assert snapshot["album_metadata"]["company_source"] == "kugou.kmr_album.publish_company"
 
 
 def test_musicdl_empty_result_is_not_exhaustive(tmp_path: Path) -> None:
