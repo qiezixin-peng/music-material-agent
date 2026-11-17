@@ -55,6 +55,16 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--page-limit", type=int, default=5)
     worker.add_argument("--max-queries", type=int, default=8)
 
+    supervisor = commands.add_parser(
+        "supervise-job",
+        help="Wait for collection, then run full reviews, materials and final export.",
+    )
+    supervisor.add_argument("job_id")
+    supervisor.add_argument("--poll-seconds", type=int, default=30)
+    supervisor.add_argument("--review-batch-size", type=int, default=5)
+    supervisor.add_argument("--material-batch-size", type=int, default=10)
+    supervisor.add_argument("--filename")
+
     commands.add_parser("list-jobs", help="List durable jobs.")
     commands.add_parser("configure-gandalf", help="Store Gandalf login in Windows Credential Manager.")
     return parser
@@ -114,6 +124,19 @@ def main() -> None:
             event_sink=_print,
         )
         _print({"event": "worker_complete", **result})
+    elif args.command == "supervise-job":
+        from .workers import supervise_job
+
+        result = supervise_job(
+            service,
+            args.job_id,
+            poll_seconds=args.poll_seconds,
+            review_batch_size=args.review_batch_size,
+            material_batch_size=args.material_batch_size,
+            filename=args.filename,
+            event_sink=_print,
+        )
+        _print({"event": "supervisor_complete", **result})
     elif args.command == "list-jobs":
         _print(service.list_jobs())
 
