@@ -201,6 +201,60 @@ class MusicDlAdapter:
                 "error": f"{type(error).__name__}: {error}",
             }
 
+    def resolve_platform_id(self, platform_id: str) -> SearchResponse:
+        identifier = str(platform_id).strip()
+        if self.platform != "qq":
+            return SearchResponse(
+                backend=self.name,
+                platform=self.platform,
+                query=f"id:{identifier}",
+                status="RESOLVE_UNAVAILABLE",
+                candidates=[],
+                exhaustive=False,
+                error=f"Official ID resolution is not implemented for {self.platform}",
+            )
+        try:
+            client = self._get_client()
+            source = getattr(client, "music_clients", {}).get(self.client_name)
+            if source is None:
+                raise RuntimeError("QQ musicdl source client is unavailable")
+            item = source._getsongmetainfo(identifier)
+            if not isinstance(item, dict) or not item:
+                return SearchResponse(
+                    backend=self.name,
+                    platform="qq",
+                    query=f"id:{identifier}",
+                    status="RESOLVE_UNAVAILABLE",
+                    candidates=[],
+                    pages_scanned=0,
+                    exhaustive=False,
+                    error="QQ official song detail returned no metadata",
+                )
+            candidate = _qq_metadata_candidate(item)
+            if candidate.get("platform_id") != identifier:
+                raise RuntimeError("QQ official song detail returned a different platform ID")
+            return SearchResponse(
+                backend=self.name,
+                platform="qq",
+                query=f"id:{identifier}",
+                status="OK",
+                candidates=[candidate],
+                pages_scanned=1,
+                exhaustive=False,
+            )
+        except Exception as error:
+            sanitized = _sanitize_backend_error(f"{type(error).__name__}: {error}")
+            return SearchResponse(
+                backend=self.name,
+                platform="qq",
+                query=f"id:{identifier}",
+                status="RESOLVE_UNAVAILABLE",
+                candidates=[],
+                pages_scanned=0,
+                exhaustive=False,
+                error=sanitized,
+            )
+
     def search(self, request: SearchRequest) -> SearchResponse:
         try:
             client = self._get_client()

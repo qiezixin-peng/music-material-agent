@@ -49,6 +49,24 @@ def export_job_xlsx(job_id: str, filename: str | None = None, allow_partial: boo
 
 
 @mcp.tool()
+def finalize_job(
+    job_id: str,
+    filename: str | None = None,
+    require_reviews: bool = True,
+    require_materials: bool = True,
+    actor: str = "agent",
+) -> dict[str, Any]:
+    """Create the final XLSX and hash manifest only after strict collection/review/material coverage."""
+    return service.finalize_job(
+        job_id,
+        filename=filename,
+        require_reviews=require_reviews,
+        require_materials=require_materials,
+        actor=actor,
+    )
+
+
+@mcp.tool()
 def download_verified_candidate(job_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
     """Resolve an opaque backend candidate, then keep it only after signature and FFprobe verification."""
     return service.download_candidate(job_id, candidate)
@@ -219,6 +237,62 @@ def get_job_rows(job_id: str, offset: int = 0, limit: int = 100) -> dict[str, An
 
 
 @mcp.tool()
+def collect_platform_batch(
+    job_id: str,
+    platform: str,
+    agent_id: str,
+    max_rows: int = 10,
+    page_limit: int = 5,
+    max_queries: int = 8,
+    seal_when_complete: bool = True,
+    retry_technical: bool = False,
+) -> dict[str, Any]:
+    """Run a resumable native-search batch, record every row outcome, and optionally seal full coverage."""
+    from .collection import run_platform_collection
+
+    return run_platform_collection(
+        service,
+        job_id,
+        platform,
+        agent_id,
+        max_rows=max_rows,
+        page_limit=page_limit,
+        max_queries=max_queries,
+        seal_when_complete=seal_when_complete,
+        retry_technical=retry_technical,
+    )
+
+
+@mcp.tool()
+def get_platform_progress(job_id: str, platform: str) -> dict[str, Any]:
+    """Report exact durable coverage and status counts for one platform partition."""
+    return service.partition_progress(job_id, platform)
+
+
+@mcp.tool()
+def collect_materials_batch(
+    job_id: str,
+    platform: str,
+    agent_id: str,
+    max_rows: int = 10,
+    include_audio: bool = False,
+    retry_failed: bool = False,
+) -> dict[str, Any]:
+    """Persist cover, avatar and lyric assets separately from immutable search snapshots."""
+    from .materials import run_material_batch
+
+    return run_material_batch(
+        service,
+        job_id,
+        platform,
+        agent_id,
+        max_rows=max_rows,
+        include_audio=include_audio,
+        retry_failed=retry_failed,
+    )
+
+
+@mcp.tool()
 def claim_platform_partition(
     job_id: str, platform: str, agent_id: str, lease_minutes: int = 30
 ) -> dict[str, Any]:
@@ -291,6 +365,29 @@ def submit_review_verdict(
 def get_review_coverage(review_id: str) -> dict[str, Any]:
     """Report exact reviewed/total counts; completion requires 100 percent coverage."""
     return service.review_coverage(review_id)
+
+
+@mcp.tool()
+def review_platform_batch(
+    review_id: str,
+    agent_id: str,
+    max_rows: int = 10,
+    page_limit: int = 5,
+    max_queries: int = 8,
+    seal_when_complete: bool = True,
+) -> dict[str, Any]:
+    """Independently re-search every assigned row; never sample and never overwrite collection data."""
+    from .reviewing import run_review_batch
+
+    return run_review_batch(
+        service,
+        review_id,
+        agent_id,
+        max_rows=max_rows,
+        page_limit=page_limit,
+        max_queries=max_queries,
+        seal_when_complete=seal_when_complete,
+    )
 
 
 @mcp.tool()

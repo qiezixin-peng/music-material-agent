@@ -27,6 +27,10 @@
 - QQ 使用 `musicdl` 的官方加密搜索端点；即使后续音频解析失败，也会保留官方搜索元数据候选并明确标注 `metadata_only`，不会再把“音频暂不可取”误判为“歌曲不存在”。
 - 原生接口直接返回的歌词文本可由 `save_verified_lyric_text` 验证后原子落盘；事件只记录路径、大小与 SHA-256，不复制整篇歌词。
 - 最终 XLSX 同时导出源行、五平台原始字段、证据和逐行复核结论。
+- `collect_platform_batch` 将表格映射、原生搜索、逐行留痕、断点续跑和分区冻结串成一个 Agent 批处理；常见中英文列名可自动识别，也支持任务级 `column_map`。
+- `review_platform_batch` 对分配中的每一行独立重搜，不抽样；只有同平台 ID 复核一致才自动判定通过。
+- `collect_materials_batch` 将封面、头像、歌词及其缺失/失败状态保存到独立物料清单，不修改已冻结搜索快照。
+- `finalize_job` 严格检查采集、互审和物料覆盖率，随后输出最终 XLSX、SHA-256 与 `final-manifest.json`。
 
 `musicdl 2.14.2` 始终是五平台主干后端；无界面汽水 helper 是针对客户端登录态、PC 签名搜索和音频下载的补强层，Scrapling 负责网页证据。三者的候选统一进入同一评分、留痕和复核流程。任何非穷尽空结果都不会被报告为平台不存在。
 
@@ -53,6 +57,8 @@ uv run music-material mcp-http --host 127.0.0.1 --port 8766
 
 物料工具分为两类：`download_verified_asset` 处理封面、头像或远程歌词 URL；`save_verified_lyric_text` 处理 `musicdl` 候选中已经内联返回的歌词。两者都先写 staging，通过验证后才移动到正式任务输出。
 
+推荐 Agent 工作流：`create_job` → 五个 Agent 分别循环调用 `collect_platform_batch` → `create_review_plan` → 各复核 Agent 循环调用 `review_platform_batch` → 各平台调用 `collect_materials_batch` → `finalize_job`。每个批处理都能从数据库断点续跑；默认一批 10 行，长表不需要绑定单个聊天窗口。
+
 Agent 的硬性操作规则见 [AGENTS.md](AGENTS.md)，架构与可信度边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 已知外部条件
@@ -60,3 +66,4 @@ Agent 的硬性操作规则见 [AGENTS.md](AGENTS.md)，架构与可信度边界
 - `musicdl` 使用 PolyForm Noncommercial 许可证；若此项目用于商业活动，部署前必须单独确认授权或替换该后端。
 - 当前机器已安装 FFmpeg 9.0.1，文件级验真已启用。
 - Gandalf 不进入常规真值链；即使以后接入，也只在候选不确定时按需锚定。
+- 非汽水平台音频暂不自动经过旧版 `go-music-dl` Web 后端；在无界面下载后端完成前会明确记录 `HEADLESS_BACKEND_REQUIRED`，不会偷偷启动 UI。

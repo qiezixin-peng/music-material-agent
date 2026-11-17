@@ -22,4 +22,8 @@ async def test_mcp_registers_durable_workflow_tools() -> None:
         "create_review_plan",
         "submit_review_verdict",
         "get_review_coverage",
+        "collect_platform_batch",
+        "collect_materials_batch",
+        "review_platform_batch",
+        "finalize_job",
     } <= tools

@@ -22,6 +22,8 @@
 5. 复核者不得复核自己的采集分区；必须检查每一行，不得抽样。
 6. 修正以 verdict/patch 追加保存，不覆盖原采集结果。覆盖率必须达到 100% 才能冻结复核。
 
+优先使用高层工具，避免每行手工拼接状态：采集 Agent 循环调用 `collect_platform_batch`，复核 Agent 循环调用 `review_platform_batch`，物料阶段调用 `collect_materials_batch`。所有平台与复核均完成后才调用 `finalize_job`；如果严格收口拒绝生成结果，应先补齐返回的缺失层，不得绕过覆盖率门槛。
+
 ## 痕迹与安全
 
 - 正式结果写入 `D:\三喜\歌曲物料下载\Agent任务\<job_id>`。

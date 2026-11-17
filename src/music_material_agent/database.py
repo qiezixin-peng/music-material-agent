@@ -96,11 +96,31 @@ CREATE TABLE IF NOT EXISTS events (
     payload_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS materials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    row_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    path TEXT,
+    size_bytes INTEGER,
+    sha256 TEXT,
+    error TEXT,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (job_id,row_id,platform,kind),
+    FOREIGN KEY (job_id,row_id) REFERENCES job_rows(job_id,row_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_rows_job ON job_rows(job_id, row_number);
 CREATE INDEX IF NOT EXISTS idx_observations_job_platform ON observations(job_id, platform);
 CREATE INDEX IF NOT EXISTS idx_reviews_job ON reviews(job_id, status);
 CREATE INDEX IF NOT EXISTS idx_verdicts_review ON review_verdicts(review_id);
 CREATE INDEX IF NOT EXISTS idx_events_job ON events(job_id, id);
+CREATE INDEX IF NOT EXISTS idx_materials_job_platform ON materials(job_id, platform, kind);
 """
 
 

@@ -169,6 +169,32 @@ def test_qq_adapter_falls_back_to_official_search_metadata(tmp_path: Path) -> No
     assert response.candidates[0]["release_date"] == "2020-01-02"
 
 
+def test_qq_adapter_resolves_exact_id_without_keyword_or_audio(tmp_path: Path) -> None:
+    class FakeSource:
+        def _getsongmetainfo(self, identifier: str):
+            assert identifier == "qq-mid"
+            return {
+                "mid": identifier,
+                "title": "平台官方名称",
+                "singer": [{"mid": "artist-mid", "name": "歌手"}],
+                "album": {"mid": "album-mid", "title": "专辑"},
+                "interval": 200,
+                "time_public": "2022-03-04",
+            }
+
+    class FakeQQClient:
+        music_clients = {"QQMusicClient": FakeSource()}
+
+        def search(self, keyword: str):
+            raise AssertionError("exact ID must not run keyword search")
+
+    adapter = MusicDlAdapter("qq", work_dir=tmp_path, client_factory=lambda **_: FakeQQClient())
+    response = adapter.resolve_platform_id("qq-mid")
+    assert response.status == "OK"
+    assert response.candidates[0]["title_raw"] == "平台官方名称"
+    assert response.candidates[0]["release_date"] == "2022-03-04"
+
+
 def test_musicdl_empty_result_is_not_exhaustive(tmp_path: Path) -> None:
     class EmptyClient:
         def search(self, keyword: str):

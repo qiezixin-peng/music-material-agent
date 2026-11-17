@@ -10,7 +10,25 @@ from .constants import PLATFORMS
 from .database import Database
 
 
-FIELDS = ("status", "platform_id", "title_raw", "artists_raw", "album_raw", "release_date", "cover_url", "artist_avatar_url", "lyric", "audio_path")
+FIELDS = (
+    "status",
+    "platform_id",
+    "title_raw",
+    "artists_raw",
+    "album_raw",
+    "release_date",
+    "cover_url",
+    "cover_path",
+    "cover_status",
+    "artist_avatar_url",
+    "artist_avatar_path",
+    "avatar_status",
+    "lyric",
+    "lyric_path",
+    "lyric_status",
+    "audio_path",
+    "audio_status",
+)
 
 
 def _cell(value: Any) -> Any:
@@ -40,8 +58,15 @@ def export_job_workbook(database: Database, job_id: str, output_path: str | Path
                FROM review_verdicts rv JOIN reviews r ON r.id=rv.review_id WHERE r.job_id=?""",
             (job_id,),
         ).fetchall()
+        materials = connection.execute(
+            "SELECT row_id,platform,kind,status,path FROM materials WHERE job_id=?",
+            (job_id,),
+        ).fetchall()
 
     obs_map = {(row["row_id"], row["platform"]): row for row in observations}
+    material_map = {
+        (row["row_id"], row["platform"], row["kind"]): row for row in materials
+    }
     review_map: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in reviews:
         review_map.setdefault((row["row_id"], row["source_platform"]), []).append(
@@ -69,6 +94,16 @@ def export_job_workbook(database: Database, job_id: str, output_path: str | Path
             observation = obs_map.get((row["row_id"], platform))
             data = json.loads(observation["data_json"]) if observation else {}
             status = observation["status"] if observation else "MISSING"
+            for kind, path_field, status_field in (
+                ("cover", "cover_path", "cover_status"),
+                ("avatar", "artist_avatar_path", "avatar_status"),
+                ("lyric", "lyric_path", "lyric_status"),
+                ("audio", "audio_path", "audio_status"),
+            ):
+                material = material_map.get((row["row_id"], platform, kind))
+                if material:
+                    data[path_field] = material["path"]
+                    data[status_field] = material["status"]
             values.extend(_cell(status if field == "status" else data.get(field)) for field in FIELDS)
             values.append(_cell(json.loads(observation["evidence_json"])) if observation else None)
             values.append(_cell(review_map.get((row["row_id"], platform), [])))

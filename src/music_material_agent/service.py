@@ -61,6 +61,109 @@ class MusicMaterialService:
             allow_partial=allow_partial,
         )
 
+    def finalize_job(
+        self,
+        job_id: str,
+        *,
+        filename: str | None = None,
+        require_reviews: bool = True,
+        require_materials: bool = True,
+        actor: str = "agent",
+    ) -> dict[str, Any]:
+        """Strictly close a job and emit a hashed manifest only after required coverage."""
+        with self.database.connect() as connection:
+            job = connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not job:
+                raise KeyError(job_id)
+            partitions = connection.execute(
+                "SELECT platform,status,snapshot_hash FROM partitions WHERE job_id=? ORDER BY platform",
+                (job_id,),
+            ).fetchall()
+            reviews = connection.execute(
+                "SELECT id,source_platform,reviewer_platform,status FROM reviews WHERE job_id=? ORDER BY id",
+                (job_id,),
+            ).fetchall()
+            observation_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM observations WHERE job_id=?", (job_id,)
+            ).fetchone()["count"]
+            material_rows = connection.execute(
+                """SELECT platform,kind,status,COUNT(*) AS count FROM materials
+                   WHERE job_id=? GROUP BY platform,kind,status""",
+                (job_id,),
+            ).fetchall()
+        unsealed = [row["platform"] for row in partitions if row["status"] != "SEALED"]
+        if unsealed:
+            raise IncompleteError(f"Unsealed collection partitions: {unsealed}")
+        if require_reviews:
+            if not reviews:
+                raise IncompleteError("No full-review plan exists")
+            open_reviews = [row["id"] for row in reviews if row["status"] != "SEALED"]
+            if open_reviews:
+                raise IncompleteError(f"Unsealed reviews: {open_reviews}")
+        material_summary: dict[str, dict[str, dict[str, int]]] = {}
+        for row in material_rows:
+            material_summary.setdefault(row["platform"], {}).setdefault(row["kind"], {})[
+                row["status"]
+            ] = row["count"]
+        if require_materials:
+            expected = observation_count
+            actual = sum(
+                row["count"]
+                for row in material_rows
+                if row["kind"] in {"cover", "avatar", "lyric"}
+            )
+            if actual != expected * 3:
+                raise IncompleteError(
+                    f"Material manifest coverage is {actual}/{expected * 3}"
+                )
+        exported = self.export_job(job_id, filename=filename, allow_partial=False)
+        workbook_path = Path(exported["path"])
+        completed_at = utc_now()
+        manifest = {
+            "job_id": job_id,
+            "completed_at": completed_at,
+            "source_workbook": job["workbook_path"],
+            "source_sha256": job["workbook_sha256"],
+            "result_workbook": str(workbook_path),
+            "result_sha256": sha256_file(workbook_path),
+            "partitions": [dict(row) for row in partitions],
+            "reviews": [dict(row) for row in reviews],
+            "materials": material_summary,
+            "requirements": {
+                "reviews": require_reviews,
+                "materials": require_materials,
+            },
+        }
+        manifest_path = Path(job["output_dir"]) / "final-manifest.json"
+        temporary = manifest_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        temporary.replace(manifest_path)
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                "UPDATE jobs SET status='COMPLETE',updated_at=? WHERE id=?",
+                (completed_at, job_id),
+            )
+            self._event(
+                connection,
+                job_id,
+                "JOB_FINALIZED",
+                {
+                    "result_workbook": str(workbook_path),
+                    "result_sha256": manifest["result_sha256"],
+                    "manifest": str(manifest_path),
+                },
+                actor=actor,
+            )
+        return {
+            "job_id": job_id,
+            "status": "COMPLETE",
+            "workbook": str(workbook_path),
+            "workbook_sha256": manifest["result_sha256"],
+            "manifest": str(manifest_path),
+        }
+
     def download_candidate(self, job_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
         with self.database.connect() as connection:
             job = connection.execute("SELECT trace_dir,output_dir FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -134,6 +237,138 @@ class MusicMaterialService:
                 actor="agent",
             )
         return result
+
+    def record_material(
+        self,
+        job_id: str,
+        row_id: str,
+        platform: str,
+        kind: str,
+        result: dict[str, Any],
+        *,
+        actor: str = "agent",
+    ) -> dict[str, Any]:
+        if kind not in {"cover", "avatar", "lyric", "audio"}:
+            raise ValueError(f"Unsupported material kind: {kind}")
+        now = utc_now()
+        metadata = {
+            key: value
+            for key, value in result.items()
+            if key not in {"path", "size_bytes", "sha256", "error"}
+        }
+        with self.database.transaction(immediate=True) as connection:
+            connection.execute(
+                """INSERT INTO materials(
+                       job_id,row_id,platform,kind,status,path,size_bytes,sha256,error,
+                       metadata_json,created_at,updated_at,version
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1)
+                   ON CONFLICT(job_id,row_id,platform,kind) DO UPDATE SET
+                       status=excluded.status,path=excluded.path,size_bytes=excluded.size_bytes,
+                       sha256=excluded.sha256,error=excluded.error,
+                       metadata_json=excluded.metadata_json,updated_at=excluded.updated_at,
+                       version=materials.version+1""",
+                (
+                    job_id,
+                    row_id,
+                    platform,
+                    kind,
+                    str(result.get("status") or "UNKNOWN"),
+                    result.get("path"),
+                    result.get("size_bytes"),
+                    result.get("sha256"),
+                    result.get("error"),
+                    canonical_json(metadata),
+                    now,
+                    now,
+                ),
+            )
+            self._event(
+                connection,
+                job_id,
+                "MATERIAL_RECORDED",
+                {
+                    "row_id": row_id,
+                    "platform": platform,
+                    "kind": kind,
+                    "status": result.get("status"),
+                    "path": result.get("path"),
+                    "sha256": result.get("sha256"),
+                },
+                actor=actor,
+            )
+        return {"row_id": row_id, "platform": platform, "kind": kind, "status": result.get("status")}
+
+    def get_material_rows(
+        self,
+        job_id: str,
+        platform: str,
+        *,
+        kinds: list[str],
+        limit: int = 10,
+        retry_failed: bool = False,
+    ) -> list[dict[str, Any]]:
+        with self.database.connect() as connection:
+            observations = connection.execute(
+                """SELECT o.row_id,o.status,o.data_json
+                   FROM observations o WHERE o.job_id=? AND o.platform=?
+                   ORDER BY o.row_id""",
+                (job_id, platform),
+            ).fetchall()
+            material_rows = connection.execute(
+                "SELECT row_id,kind,status FROM materials WHERE job_id=? AND platform=?",
+                (job_id, platform),
+            ).fetchall()
+        existing = {(row["row_id"], row["kind"]): row["status"] for row in material_rows}
+        retryable = {"DOWNLOAD_FAILED", "VALIDATION_FAILED"}
+        result: list[dict[str, Any]] = []
+        for row in observations:
+            pending = [
+                kind
+                for kind in kinds
+                if (row["row_id"], kind) not in existing
+                or (retry_failed and existing[(row["row_id"], kind)] in retryable)
+            ]
+            if not pending:
+                continue
+            result.append(
+                {
+                    "row_id": row["row_id"],
+                    "observation_status": row["status"],
+                    "observation": json.loads(row["data_json"]),
+                    "pending_kinds": pending,
+                }
+            )
+            if len(result) >= max(1, min(int(limit), 100)):
+                break
+        return result
+
+    def material_progress(
+        self, job_id: str, platform: str, *, kinds: list[str] | None = None
+    ) -> dict[str, Any]:
+        selected = kinds or ["cover", "avatar", "lyric"]
+        with self.database.connect() as connection:
+            total = connection.execute(
+                "SELECT COUNT(*) AS count FROM observations WHERE job_id=? AND platform=?",
+                (job_id, platform),
+            ).fetchone()["count"]
+            rows = connection.execute(
+                """SELECT kind,status,COUNT(*) AS count FROM materials
+                   WHERE job_id=? AND platform=? GROUP BY kind,status""",
+                (job_id, platform),
+            ).fetchall()
+        counts = {
+            kind: {
+                row["status"]: row["count"]
+                for row in rows
+                if row["kind"] == kind
+            }
+            for kind in selected
+        }
+        return {
+            "total_rows": total,
+            "kinds": counts,
+            "complete": all(sum(counts[kind].values()) == total for kind in selected),
+        }
 
     def _event(
         self,
@@ -281,6 +516,85 @@ class MusicMaterialService:
                 {"row_id": row["row_id"], "row_number": row["row_number"], "data": json.loads(row["data_json"])}
                 for row in rows
             ],
+        }
+
+    def partition_context(self, job_id: str, platform: str) -> dict[str, Any]:
+        if platform not in PLATFORMS:
+            raise ValueError(f"Unsupported platform: {platform}")
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """SELECT j.spec_json,j.trace_dir,j.output_dir,p.status AS partition_status,
+                          p.claimed_by,p.lease_until
+                   FROM jobs j JOIN partitions p ON p.job_id=j.id
+                   WHERE j.id=? AND p.platform=?""",
+                (job_id, platform),
+            ).fetchone()
+        if not row:
+            raise KeyError((job_id, platform))
+        result = dict(row)
+        result["spec"] = json.loads(result.pop("spec_json"))
+        return result
+
+    def get_partition_rows(
+        self,
+        job_id: str,
+        platform: str,
+        *,
+        limit: int = 10,
+        retry_technical: bool = False,
+    ) -> list[dict[str, Any]]:
+        retry = ("SEARCH_UNAVAILABLE", "AUTH_REQUIRED", "RATE_LIMITED", "SEARCH_PARTIAL")
+        retry_sql = " OR o.status IN (?,?,?,?)" if retry_technical else ""
+        parameters: list[Any] = [platform, job_id]
+        if retry_technical:
+            parameters.extend(retry)
+        parameters.append(max(1, min(int(limit), 100)))
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                f"""SELECT r.row_id,r.row_number,r.data_json,o.status AS observation_status
+                    FROM job_rows r
+                    LEFT JOIN observations o
+                      ON o.job_id=r.job_id AND o.row_id=r.row_id AND o.platform=?
+                    WHERE r.job_id=? AND (o.id IS NULL{retry_sql})
+                    ORDER BY r.row_number LIMIT ?""",
+                parameters,
+            ).fetchall()
+        return [
+            {
+                "row_id": row["row_id"],
+                "row_number": row["row_number"],
+                "data": json.loads(row["data_json"]),
+                "observation_status": row["observation_status"],
+            }
+            for row in rows
+        ]
+
+    def partition_progress(self, job_id: str, platform: str) -> dict[str, Any]:
+        with self.database.connect() as connection:
+            partition = connection.execute(
+                "SELECT status FROM partitions WHERE job_id=? AND platform=?",
+                (job_id, platform),
+            ).fetchone()
+            if not partition:
+                raise KeyError((job_id, platform))
+            total = connection.execute(
+                "SELECT row_count FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()["row_count"]
+            counts = connection.execute(
+                """SELECT status,COUNT(*) AS count FROM observations
+                   WHERE job_id=? AND platform=? GROUP BY status""",
+                (job_id, platform),
+            ).fetchall()
+        by_status = {row["status"]: row["count"] for row in counts}
+        observed = sum(by_status.values())
+        return {
+            "job_id": job_id,
+            "platform": platform,
+            "partition_status": partition["status"],
+            "total": total,
+            "observed": observed,
+            "remaining": total - observed,
+            "statuses": by_status,
         }
 
     def claim_partition(
@@ -511,6 +825,69 @@ class MusicMaterialService:
                 actor=agent_id,
             )
             return {"review_id": review_id, "lease_until": deadline}
+
+    def heartbeat_review(
+        self, review_id: str, agent_id: str, lease_minutes: int = 30
+    ) -> dict[str, Any]:
+        with self.database.transaction(immediate=True) as connection:
+            review = connection.execute(
+                "SELECT claimed_by,status FROM reviews WHERE id=?", (review_id,)
+            ).fetchone()
+            if not review or review["claimed_by"] != agent_id or review["status"] != "REVIEWING":
+                raise ConflictError("Agent does not own an active review")
+            deadline = _lease_deadline(lease_minutes)
+            connection.execute(
+                "UPDATE reviews SET lease_until=? WHERE id=?", (deadline, review_id)
+            )
+        return {"review_id": review_id, "lease_until": deadline}
+
+    def review_context(self, review_id: str) -> dict[str, Any]:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """SELECT r.*,j.spec_json,j.trace_dir,j.output_dir
+                   FROM reviews r JOIN jobs j ON j.id=r.job_id WHERE r.id=?""",
+                (review_id,),
+            ).fetchone()
+        if not row:
+            raise KeyError(review_id)
+        result = dict(row)
+        result["spec"] = json.loads(result.pop("spec_json"))
+        return result
+
+    def get_review_rows(self, review_id: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        with self.database.connect() as connection:
+            review = connection.execute(
+                "SELECT job_id,source_platform FROM reviews WHERE id=?", (review_id,)
+            ).fetchone()
+            if not review:
+                raise KeyError(review_id)
+            rows = connection.execute(
+                """SELECT jr.row_id,jr.row_number,jr.data_json,o.status AS source_status,
+                          o.data_json AS source_data_json
+                   FROM job_rows jr
+                   JOIN observations o
+                     ON o.job_id=jr.job_id AND o.row_id=jr.row_id AND o.platform=?
+                   LEFT JOIN review_verdicts rv
+                     ON rv.review_id=? AND rv.row_id=jr.row_id
+                   WHERE jr.job_id=? AND rv.id IS NULL
+                   ORDER BY jr.row_number LIMIT ?""",
+                (
+                    review["source_platform"],
+                    review_id,
+                    review["job_id"],
+                    max(1, min(int(limit), 100)),
+                ),
+            ).fetchall()
+        return [
+            {
+                "row_id": row["row_id"],
+                "row_number": row["row_number"],
+                "data": json.loads(row["data_json"]),
+                "source_status": row["source_status"],
+                "source_observation": json.loads(row["source_data_json"]),
+            }
+            for row in rows
+        ]
 
     def submit_review_verdict(
         self,
